@@ -1,4 +1,8 @@
 {
+  "cc_compat_label": "Claude Code 兼容模式",
+  "cc_compat_description": "仅对 Claude 模型生效。保留完整工具 JSON Schema，并在系统提示的指定客户端名称中插入零宽分隔符。保留完整提示与工具；关闭后恢复原请求转换。",
+  "cc_compat_terms_label": "系统提示兼容词",
+  "cc_compat_terms_description": "每行一个 ASCII 原文词组，不区分大小写。只处理系统提示，用户消息与工具参数保持原样。留空时仅修复工具 Schema。",
   "channel_oauth": "Antigravity OAuth",
   "channel_description": "使用 Antigravity 订阅模型并监控账户额度。",
   "authorization_code": "授权码",

@@ -1,6 +1,7 @@
 mod allowance;
 mod auth;
 mod catalog;
+mod cc_compat;
 mod client;
 mod connection;
 mod media_generation;
@@ -19,9 +20,10 @@ use stravia_vendor_common::common;
 use stravia_vendor_sdk::VendorGuest;
 use stravia_vendor_sdk::{
     AuthDescriptor, AuthFlow, AuthManualInput, AuthManualInputType, CANONICAL_FORMAT_VERSION,
-    Capability, ChannelDescriptor, DataCompatibility, ErrorKind, GuestHost, NetworkDeclaration,
-    Operation, OperationInput, OperationOutput, OriginDeclaration, PluginError, ProviderDescriptor,
-    ProviderSnapshot, VendorDescriptor, VendorKind,
+    Capability, ChannelDescriptor, ConfigField, ConfigFieldKind, DataCompatibility, ErrorKind,
+    FieldCondition, GuestHost, NetworkDeclaration, Operation, OperationInput, OperationOutput,
+    OriginDeclaration, PluginError, ProviderDescriptor, ProviderSnapshot, VendorDescriptor,
+    VendorKind,
 };
 
 const VENDOR_ID: &str = "antigravity";
@@ -40,7 +42,7 @@ pub fn descriptor() -> VendorDescriptor {
     ]);
     VendorDescriptor {
         vendor_id: VENDOR_ID.into(),
-        version: semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version"),
+        version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.cc.1")).expect("valid package version"),
         display_name: "Antigravity".into(),
         description: Some("Antigravity CLI OAuth models, native image generation, and account quota monitoring.".into()),
         authors: vec!["Stravia".into()],
@@ -79,7 +81,38 @@ pub fn descriptor() -> VendorDescriptor {
             website: Some("https://antigravity.google".into()),
             implementation: None,
             config_groups: Vec::new(),
-            config_fields: Vec::new(),
+            config_fields: vec![
+                ConfigField {
+                    key: cc_compat::OPTION.into(),
+                    label: messages::cc_compat_label(),
+                    description: Some(messages::cc_compat_description()),
+                    kind: ConfigFieldKind::Bool,
+                    required: false,
+                    default_json: Some(serde_json::json!(false)),
+                    group: None,
+                    secret: false,
+                    min: None,
+                    max: None,
+                    max_length: None,
+                    pattern: None,
+                    visible_when: None,
+                },
+                ConfigField {
+                    key: cc_compat::TERMS_OPTION.into(),
+                    label: messages::cc_compat_terms_label(),
+                    description: Some(messages::cc_compat_terms_description()),
+                    kind: ConfigFieldKind::String { multiline: true },
+                    required: false,
+                    default_json: Some(serde_json::json!(cc_compat::DEFAULT_TERMS)),
+                    group: None,
+                    secret: false,
+                    min: None,
+                    max: None,
+                    max_length: Some(2048),
+                    pattern: None,
+                    visible_when: Some(FieldCondition { field: cc_compat::OPTION.into(), equals: serde_json::json!(true) }),
+                },
+            ],
             network: NetworkDeclaration {
                 base_url_field: None,
                 extra_origins: ["oauth2.googleapis.com"]

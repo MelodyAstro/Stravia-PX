@@ -54,6 +54,7 @@ pub(crate) fn infer(
         .take()
         .filter(|id| !id.trim().is_empty())
         .ok_or_else(|| invalid("Antigravity requires an upstream model"))?;
+    let logical_model = request.model.clone();
     // Model families are canonical here; native selectors may be opaque aliases.
     let imported_tool_history = client::root(&provider) == crate::BASE_URL
         && gemini::supports_imported_tool_history(&request.model);
@@ -104,6 +105,15 @@ pub(crate) fn infer(
     // CLI 使用 private master Schema，不能让公开 Gemini codec 的能力校验
     // 拒绝 strict 或移除已核对的 schema 约束；这些边界由下方显式构造。
     let tools = request.tools.take();
+    let cc_tool_schemas = tools
+        .as_ref()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|tool| (tool.name.clone(), tool.parameters.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
     let tool_choice = request.tool_choice.take();
     let response_format = request.response_format.take();
     let stop = request.generation.stop.take();
@@ -224,6 +234,13 @@ pub(crate) fn infer(
         }
     }
     sanitize_request(&mut body)?;
+    crate::cc_compat::apply(
+        &provider.options,
+        &logical_model,
+        &cc_tool_schemas,
+        &mut body,
+    )
+    .map_err(|message| invalid(&message))?;
     if imported_tool_history {
         gemini::prepare_imported_tool_history(&mut body);
     }

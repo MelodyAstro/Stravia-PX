@@ -1,4 +1,8 @@
 {
+  "cc_compat_label": "Claude Code compatibility",
+  "cc_compat_description": "Claude models only. Preserve complete tool JSON Schemas and encode configured client-brand terms in system instructions with a zero-width separator. Keep all instructions and tools. Turn off to use the original request projection.",
+  "cc_compat_terms_label": "System instruction compatibility terms",
+  "cc_compat_terms_description": "One literal ASCII term per line, matched without case sensitivity. Only system instructions are affected; user messages and tool arguments stay unchanged. Leave empty for schema repair only.",
   "channel_oauth": "Antigravity OAuth",
   "channel_description": "Use Antigravity subscription models and monitor account quota.",
   "authorization_code": "Authorization code",
