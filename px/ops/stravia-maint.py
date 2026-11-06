@@ -24,6 +24,13 @@ def ready():
   except Exception:pass
   time.sleep(1)
  raise RuntimeError('Stravia readiness check failed')
+def snapshot_filter(member):
+ # Staged candidates are rebuildable inputs, not the running instance. In
+ # particular, archiving a staged host would duplicate it during rollback.
+ for prefix in ['opt/stravia/compat/staged','opt/stravia/responses-compat/staged']:
+  if member.name==prefix or member.name.startswith(prefix+'/'):return None
+ return member
+
 def snapshot(label):
  stamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
  target=BACKUPS/(stamp+'-'+label+'.tar.gz')
@@ -34,7 +41,7 @@ def snapshot(label):
    archive.add(DATA,arcname='var/lib/stravia')
    for name in ['/etc/init.d/stravia','/usr/local/sbin/stravia-server','/etc/nginx/stravia-proxy.inc','/etc/nginx/http.d/stravia.conf','/root/stravia-access.json','/root/stravia-client.py','/root/cache-stravia-assets.py','/usr/local/sbin/stravia-maint','/opt/stravia/compat','/opt/stravia/responses-compat','/usr/local/sbin/stravia-cc-compat']:
     p=pathlib.Path(name)
-    if p.exists():archive.add(p,arcname=name.lstrip('/'))
+    if p.exists():archive.add(p,arcname=name.lstrip('/'),filter=snapshot_filter)
   target.chmod(0o600)
   manifest={'archive':str(target),'sha256':digest(target),'release':current}
   target.with_suffix('.json').write_text(json.dumps(manifest,indent=2))
@@ -120,7 +127,7 @@ def upgrade(version):
  binary=official_binary;binary.chmod(0o755)
  if responses:
   _,candidate,staged=responses
-  custom=target/'masub-responses';custom.mkdir(exist_ok=True)
+  custom=target/'masub-responses';custom.mkdir(mode=0o755,exist_ok=True);custom.chmod(0o755)
   temporary=custom/'stravia-server.next';temporary.unlink(missing_ok=True)
   os.link(staged/candidate['host_binary'],temporary)
   os.replace(temporary,custom/'stravia-server')
