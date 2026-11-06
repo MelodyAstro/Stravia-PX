@@ -803,6 +803,26 @@ pub fn decode_input_item(item: &Value) -> Result<Option<AiItem>> {
             }))
         }
 
+        "additional_tools" => {
+            if item
+                .get("role")
+                .is_some_and(|role| role.as_str() != Some("developer"))
+            {
+                anyhow::bail!("additional_tools role must be developer");
+            }
+            if item
+                .get("id")
+                .is_some_and(|id| !id.is_null() && !id.is_string())
+            {
+                anyhow::bail!("additional_tools id must be a string or null");
+            }
+            validate_additional_tools(item.get("tools"))?;
+            // Tool availability is positional. Keep the complete declarations
+            // here instead of promoting them to request-level tools.
+            let mut result = AiItem::unknown(item.clone());
+            result.role = Role::Developer;
+            Ok(Some(result))
+        }
         "message" => decode_message_item(item, false),
         other if super::is_registered_extension_item(other) => {
             super::validate_extension_item(item, true)?;
@@ -813,6 +833,34 @@ pub fn decode_input_item(item: &Value) -> Result<Option<AiItem>> {
         }
         other => anyhow::bail!("unsupported Open Responses input item type: {other}"),
     }
+}
+
+fn validate_additional_tools(value: Option<&Value>) -> Result<()> {
+    let tools = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("additional_tools tools must be an array"))?;
+    for tool in tools {
+        let object = tool
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("additional_tools declaration must be an object"))?;
+        if object.get("type").is_some_and(|kind| !kind.is_string()) {
+            anyhow::bail!("additional_tools declaration type must be a string");
+        }
+        if object.get("type").and_then(Value::as_str) == Some("namespace") {
+            if object
+                .get("name")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                anyhow::bail!("additional_tools namespace requires a name");
+            }
+            validate_additional_tools(object.get("tools"))?;
+        }
+    }
+    // Reuse ordinary Responses function validation, but keep the original JSON
+    // so namespace schemas, custom grammars and future native fields survive.
+    parse_tools(value)?;
+    Ok(())
 }
 
 fn decode_message_item(item: &Value, allow_video: bool) -> Result<Option<AiItem>> {

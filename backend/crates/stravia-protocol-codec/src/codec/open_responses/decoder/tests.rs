@@ -1,6 +1,62 @@
 use super::*;
 
 #[test]
+fn additional_tools_preserve_positions_namespaces_and_schemas_on_round_trip() {
+    let first = serde_json::json!({"type":"additional_tools","role":"developer","id":"at_1","tools":[{
+        "type":"namespace","name":"functions","description":"Local test tools","tools":[{
+            "type":"function","name":"echo","description":"Echo metadata","strict":false,
+            "parameters":{"type":"object","properties":{"metadata":{"type":"object","additionalProperties":{"type":"string"}}}}
+        },{"type":"custom","name":"patch","format":{"type":"grammar","syntax":"lark","definition":"start: \"ok\""}}]
+    }]});
+    let second = serde_json::json!({"type":"additional_tools","role":"developer","tools":[{
+        "type":"function","name":"late_tool","parameters":{"type":"object"}}
+    ]});
+    let original = serde_json::json!({"model":"logical-model","input":[
+        {"role":"user","content":"before tools"},first,
+        {"role":"user","content":"between tools"},second,
+        {"role":"user","content":"after tools"}
+    ]});
+    let request = ResponsesDecoder.decode_request(original.clone()).unwrap();
+    assert_eq!(request.items[1].role, Role::Developer);
+    assert_eq!(request.items[1].unknown_ref(), Some(&first));
+    assert_eq!(request.items[3].unknown_ref(), Some(&second));
+    assert!(request.tools.as_ref().is_none_or(|tools| tools.is_empty()));
+    assert!(request.parameters.native_tools.is_empty());
+    let (encoded, _) = crate::codec::open_responses::encoder::ResponsesEncoder
+        .encode_request(request)
+        .unwrap();
+    assert_eq!(encoded["input"].as_array().unwrap().len(), 5);
+    assert_eq!(encoded["input"][1], first);
+    assert_eq!(encoded["input"][3], second);
+    assert_eq!(encoded["input"][0]["content"][0]["text"], "before tools");
+    assert_eq!(encoded["input"][2]["content"][0]["text"], "between tools");
+    assert_eq!(encoded["input"][4]["content"][0]["text"], "after tools");
+}
+
+#[test]
+fn additional_tools_reject_malformed_declarations_and_non_developer_roles() {
+    for item in [
+        serde_json::json!({"type":"additional_tools","tools":null}),
+        serde_json::json!({"type":"additional_tools","tools":["bad"]}),
+        serde_json::json!({"type":"additional_tools","role":"user","tools":[]}),
+        serde_json::json!({"type":"additional_tools","role":null,"tools":[]}),
+        serde_json::json!({"type":"additional_tools","id":12,"tools":[]}),
+        serde_json::json!({"type":"additional_tools","tools":[{"type":"function","parameters":{}}]}),
+        serde_json::json!({"type":"additional_tools","tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"x","parameters":12}]}]}),
+    ] {
+        let body = serde_json::json!({"model":"logical-model","input":[item,{"role":"user","content":"test"}]});
+        assert!(ResponsesDecoder.decode_request(body).is_err());
+    }
+    assert!(
+        ResponsesDecoder
+            .decode_request(serde_json::json!({"model":"logical-model","input":[
+                {"type":"additional_tools","tools":[]},{"role":"user","content":"test"}
+            ]}))
+            .is_ok()
+    );
+}
+
+#[test]
 fn message_text_fidelity_survives_plain_and_media_content() {
     let text = ["first\n", "", "🙂\tlast"];
     for with_image in [false, true] {

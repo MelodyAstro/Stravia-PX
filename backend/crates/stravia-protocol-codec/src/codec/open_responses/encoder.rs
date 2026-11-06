@@ -77,7 +77,9 @@ impl ResponsesEncoder {
             }
             if let Some(raw) = item.unknown_ref() {
                 let item_type = raw.get("type").and_then(Value::as_str).unwrap_or_default();
-                if !super::is_registered_extension_item(item_type) {
+                if !super::is_registered_extension_item(item_type)
+                    && item_type != "additional_tools"
+                {
                     continue;
                 }
                 let MessageContent::Blocks(mut blocks) = item.content else {
