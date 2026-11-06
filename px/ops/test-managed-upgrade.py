@@ -95,6 +95,7 @@ with tempfile.TemporaryDirectory(prefix='stravia-upgrade-test-') as temporary:
  assert 'restore' not in events and events.count('import-claude')==1
  assert json.loads((responses_dir/'manifest.json').read_text())==candidate
  assert (root/'releases/v9.0.0/masub-responses/stravia-server').read_bytes()==b'new Responses host'
+ assert (root/'releases/v9.0.0/masub-responses').stat().st_mode&0o777==0o755
  assert candidate_host.stat().st_ino==(root/'releases/v9.0.0/masub-responses/stravia-server').stat().st_ino
  # The first install must use the staged pair even before an active Responses
  # manifest exists; it must not download/import the stock Codex component.
