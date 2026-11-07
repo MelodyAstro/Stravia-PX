@@ -92,7 +92,9 @@ Responses 受管理主程序的 manifest 增加：
 - `ops/package-request-models.py --repository <checkout> --output-directory <private-dir>`
   打包 GNU 主程序和构建出的不可变网页资源；`--tests` 打包隔离测试二进制。
 - `ops/run-native-request-model-tests.py` 在本实例独立 GNU 运行库中运行九项测试，
-  使用临时数据库和本地模拟上游，不调用生产账号。需先准备 root 私有测试产物清单。
+  使用临时数据库和本地模拟上游，不调用生产账号。测试包经分片传输后，以只读
+  SquashFS 挂载运行，避免展开大型测试二进制；挂载和临时目录在结束时清理。
+  需先准备 root 私有测试产物清单，以及临时 `squashfs-tools-ng` 和内核模块。
 - `ops/deploy-v064-request-models.py` 是本次 v0.6.4 的一次性切换脚本，校验旧版本、
   摘要和功能标记，完整备份后再切换；失败恢复。它不是通用未来版本升级入口。
 - `ops/verify-request-models-live.py` 在本实例用合成请求验证短名称、临时自定义名称、
@@ -102,18 +104,24 @@ Responses 受管理主程序的 manifest 增加：
 - `ops/verify-claude-code-compat.py` 验证 Sonnet、Opus 的 7 消息/38 工具/32000 上限
   合成 CC 请求和字典工具结果往返；保持兼容开关开启，不需要真实聊天捕获。
 
-本轮 Linux 测试二进制构建对 `stravia-core` 单独使用 `opt-level=1` 和
-`codegen-units=256`，缩短测试编译；九项断言完整保留。原生生产主程序仍使用默认
-release 优化。等价 Cargo 参数为：
+最终 Linux 测试二进制构建对 `stravia-core` 单独使用 `opt-level=0` 和
+`codegen-units=16`；九项回归完整保留。该配置生成的是测试产物，不作为生产
+主程序发布。原生生产主程序仍使用默认 release 优化。等价 Cargo 参数为：
 
 ```sh
 cargo test --locked --release --target x86_64-unknown-linux-gnu \
-  --config 'profile.release.package.stravia-core.opt-level=1' \
-  --config 'profile.release.package.stravia-core.codegen-units=256' \
+  --config 'profile.release.package.stravia-core.opt-level=0' \
+  --config 'profile.release.package.stravia-core.codegen-units=16' \
   -p stravia-core --lib --no-run
 ```
 
 GNU 目标的 glibc 最低版本需要匹配服务器的独立运行库；跨平台构建使用对应 Zig linker。
+
+平台单个 Artifact 上限为 100 MiB。`ops/upload-test-parts.cjs <private-directory>`
+将测试包分成 64 MiB 分片，调用同目录的 `upload-build-artifact.cjs` 上传，并只把
+分片 ID、大小和摘要写入清单。私有目录需有 `stravia-access.json`、打包产物和清单。
+每片上传凭据回执也只留在该私有目录，不能提交。服务端从分片流直接生成压缩镜像，
+不额外拼接整包或展开 ELF。测试通过后移除临时安装的测试工具。
 
 运维脚本中的清单、产物和报告放在 root 私有目录，不提交仓库；完整备份也包含凭据。
 本次通过 Artifact 上传的构建包在验证并使用后标记到期，由平台正常 GC 清理；
