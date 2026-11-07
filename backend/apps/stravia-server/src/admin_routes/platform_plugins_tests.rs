@@ -143,6 +143,21 @@ async fn platform_plugins_http_install_update_disable_and_uninstall() -> anyhow:
     let response = app
         .clone()
         .oneshot(
+            Request::put(settings_path)
+                .header("authorization", &auth)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"config":null}"#))?,
+        )
+        .await?;
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "explicit null is not an absent configuration update"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
             Request::post("/api/v1/platform-plugins/different-plugin")
                 .header("authorization", &auth)
                 .header("content-type", "application/wasm")

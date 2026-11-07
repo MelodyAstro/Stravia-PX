@@ -27,7 +27,14 @@ pub struct PlatformPluginSummary {
 #[serde(deny_unknown_fields)]
 pub struct PlatformPluginUpdate {
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "present_configuration")]
     pub config: Option<Value>,
+}
+
+fn present_configuration<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone)]

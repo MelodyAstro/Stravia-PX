@@ -173,6 +173,42 @@ async fn replacement_requires_the_installed_identity_and_preserves_settings_on_r
 }
 
 #[tokio::test]
+async fn explicit_null_configuration_is_rejected_without_changing_committed_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let manager = PlatformPlugins::open(directory.path()).await.unwrap();
+    let installed = manager.install(fixture()).await.unwrap();
+    let id = &installed.manifest.id;
+    manager
+        .update(
+            id,
+            PlatformPluginUpdate {
+                enabled: Some(true),
+                config: Some(json!({"system":"keep this policy"})),
+            },
+        )
+        .await
+        .unwrap();
+    let metadata_path = directory.path().join("platform-plugins/installed.json");
+    let before = std::fs::read(&metadata_path).unwrap();
+    let input: PlatformPluginUpdate =
+        serde_json::from_value(json!({"enabled":false,"config":null})).unwrap();
+    assert_eq!(input.config, Some(serde_json::Value::Null));
+    assert!(manager.update(id, input).await.is_err());
+    let current = manager.list();
+    assert!(current[0].enabled);
+    assert_eq!(current[0].config, json!({"system":"keep this policy"}));
+    assert_eq!(std::fs::read(&metadata_path).unwrap(), before);
+    let omitted: PlatformPluginUpdate = serde_json::from_value(json!({"enabled":false})).unwrap();
+    assert_eq!(omitted.config, None);
+    manager.update(id, omitted).await.unwrap();
+    assert!(!manager.list()[0].enabled);
+    assert_eq!(
+        manager.list()[0].config,
+        json!({"system":"keep this policy"})
+    );
+}
+
+#[tokio::test]
 async fn hook_and_tool_requests_pin_config_and_survive_disable_and_uninstall() {
     let directory = tempfile::tempdir().unwrap();
     let manager = PlatformPlugins::open(directory.path()).await.unwrap();
