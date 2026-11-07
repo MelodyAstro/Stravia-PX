@@ -729,8 +729,8 @@ pub(super) async fn orchestrate(
             },
         )
     });
-    let resolved_client_model =
-        match crate::request_models::resolve(&gw, &principal, &request.model).await {
+    let (resolved_client_model, model_name_mapped) =
+        match crate::request_models::resolve_mapping(&gw, &principal, &request.model).await {
             Ok(model) => model,
             Err(error) => {
                 return reject_before_admission(
@@ -919,6 +919,7 @@ pub(super) async fn orchestrate(
             generation.principal.clone(),
             ingress,
         )
+        .with_request_model(model_name_mapped.then(|| generation.client_request.model.clone()))
         .with_upload_gateway(gw.clone()),
     );
     let response = dispatch_pipeline_inner(DispatchContext {
@@ -1080,7 +1081,7 @@ async fn dispatch_round(
                 let response = match projection
                     .as_mut()
                     .expect("buffered Client Projection session")
-                    .prepare_upload_delivery(&response)
+                    .prepare_response_delivery(&response)
                     .await
                 {
                     Ok(std::borrow::Cow::Borrowed(_)) => response,
@@ -1397,7 +1398,10 @@ async fn execute_shared_model_turn(input: SharedModelTurnInput<'_>) -> RoundOutc
                     staged_delivery,
                     pending_generation_chain,
                 } = *plan;
-                let response = match projection_session.prepare_upload_delivery(&response).await {
+                let response = match projection_session
+                    .prepare_response_delivery(&response)
+                    .await
+                {
                     Ok(std::borrow::Cow::Borrowed(_)) => response,
                     Ok(std::borrow::Cow::Owned(delivered)) => delivered,
                     Err(error) => return buffered_response(hook_failure_response(error)),
@@ -1463,7 +1467,7 @@ async fn execute_shared_model_turn(input: SharedModelTurnInput<'_>) -> RoundOutc
         DeliveryAdapter::non_stream(ingress, route.egress)
     };
     let client_response = match projection_session
-        .prepare_upload_delivery(&prepared_response)
+        .prepare_response_delivery(&prepared_response)
         .await
     {
         Ok(response) => response,

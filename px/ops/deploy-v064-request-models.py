@@ -77,6 +77,12 @@ staged=root/'responses-compat/staged/v0.6.4';staged.mkdir(parents=True,exist_ok=
 temporary=staged/'stravia-server.request-model-next';temporary.unlink(missing_ok=True);os.link(candidate/'stravia-server',temporary);os.replace(temporary,staged/'stravia-server')
 atomic(staged/'source.patch',patch.read_bytes());atomic(staged/'manifest.json',json.dumps(manifest,indent=2).encode())
 shutil.copy2(private/'stravia-maint-request-models.py','/usr/local/sbin/stravia-maint');pathlib.Path('/usr/local/sbin/stravia-maint').chmod(0o700)
+# This exact, verified upload is only a deployment transport. Use the same
+# expiry marker as ArtifactStore.delete_ready; Stravia performs its normal GC
+# on restart. The staged executable and local package remain available.
+with sqlite3.connect('/var/lib/stravia/db/gateway.db',timeout=30) as db:
+ key=db.execute('SELECT id FROM api_keys WHERE name=?',('GPT-Private',)).fetchone()[0]
+ assert db.execute('UPDATE artifacts SET expires_at=0 WHERE id=? AND principal=? AND state=? AND storage_backend=?',(spec['host_artifact_id'],'api-key:'+key,'ready','internal')).rowcount==1
 backup_process=subprocess.run(['/usr/local/sbin/stravia-maint','backup'],capture_output=True,text=True,check=True,timeout=300)
 backup=next(json.loads(line) for line in backup_process.stdout.splitlines() if line.startswith('{') and 'archive' in json.loads(line))
 (private/'stravia-request-model-pre-change-backup.json').write_text(json.dumps(backup,indent=2))

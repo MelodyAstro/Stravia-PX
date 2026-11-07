@@ -108,16 +108,26 @@ pub(crate) async fn resolve(
     principal: &Principal,
     requested: &str,
 ) -> anyhow::Result<Option<RouteConfig>> {
+    Ok(resolve_mapping(gateway, principal, requested).await?.0)
+}
+
+pub(crate) async fn resolve_mapping(
+    gateway: &Gateway,
+    principal: &Principal,
+    requested: &str,
+) -> anyhow::Result<(Option<RouteConfig>, bool)> {
     let config = load(gateway, principal.api_key_id()).await?;
     let cache = gateway.model_cache.read().await;
-    Ok(match config.target(requested) {
+    let mapped = config.target(requested);
+    let route = match mapped {
         Some(target) => cache
             .models
             .iter()
             .find(|model| model.id.as_str() == target)
             .cloned(),
         None => cache.resolve(requested).cloned(),
-    })
+    };
+    Ok((route, mapped.is_some()))
 }
 
 #[derive(Debug, Clone, Serialize)]

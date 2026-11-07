@@ -91,7 +91,7 @@ Responses 受管理主程序的 manifest 增加：
 
 - `ops/package-request-models.py --repository <checkout> --output-directory <private-dir>`
   打包 GNU 主程序和构建出的不可变网页资源；`--tests` 打包隔离测试二进制。
-- `ops/run-native-request-model-tests.py` 在本实例独立 GNU 运行库中运行八项测试，
+- `ops/run-native-request-model-tests.py` 在本实例独立 GNU 运行库中运行九项测试，
   使用临时数据库和本地模拟上游，不调用生产账号。需先准备 root 私有测试产物清单。
 - `ops/deploy-v064-request-models.py` 是本次 v0.6.4 的一次性切换脚本，校验旧版本、
   摘要和功能标记，完整备份后再切换；失败恢复。它不是通用未来版本升级入口。
@@ -99,6 +99,23 @@ Responses 受管理主程序的 manifest 增加：
   两域名 HTTP/WebSocket 与工具往返、权限、识别和静态资源。会实际调用上游；
   需同目录对应脚本在服务器命名为 `/root/verify-stravia-responses-streams.py`，
   以及既有 root 私有认证助手和凭据。完成后恢复原映射并清空识别。
+- `ops/verify-claude-code-compat.py` 验证 Sonnet、Opus 的 7 消息/38 工具/32000 上限
+  合成 CC 请求和字典工具结果往返；保持兼容开关开启，不需要真实聊天捕获。
+
+本轮 Linux 测试二进制构建对 `stravia-core` 单独使用 `opt-level=1` 和
+`codegen-units=256`，缩短测试编译；九项断言完整保留。原生生产主程序仍使用默认
+release 优化。等价 Cargo 参数为：
+
+```sh
+cargo test --locked --release --target x86_64-unknown-linux-gnu \
+  --config 'profile.release.package.stravia-core.opt-level=1' \
+  --config 'profile.release.package.stravia-core.codegen-units=256' \
+  -p stravia-core --lib --no-run
+```
+
+GNU 目标的 glibc 最低版本需要匹配服务器的独立运行库；跨平台构建使用对应 Zig linker。
 
 运维脚本中的清单、产物和报告放在 root 私有目录，不提交仓库；完整备份也包含凭据。
+本次通过 Artifact 上传的构建包在验证并使用后标记到期，由平台正常 GC 清理；
+不对用户上传文件做清理。打包产物另留在运维机，回退使用旧原生程序和完整快照。
 未来编译 LXC 只负责产出和校验原生文件，运行服务器无需安装编译工具。

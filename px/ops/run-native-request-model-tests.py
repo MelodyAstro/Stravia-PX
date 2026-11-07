@@ -22,7 +22,10 @@ result=subprocess.run(command,env={**os.environ,'TMPDIR':str(temporary),'TOKIO_W
 log=root/'stravia-native-request-model-tests.log';log.write_text(result.stdout+'\n'+result.stderr);log.chmod(0o600)
 print(result.stdout[-5000:],flush=True)
 assert result.returncode==0,'Native tests failed; diagnostics retained in root-only log'
-match=re.search(r'test result: ok\. (\d+) passed; 0 failed;',result.stdout);assert match and int(match[1])>=8
+match=re.search(r'test result: ok\. (\d+) passed; 0 failed;',result.stdout);assert match and int(match[1])>=9
 report={'passed':True,'native_linux_tests':int(match[1]),'binary_sha256':spec['binary_sha256'],'isolated_temporary_data':True,'production_keys_not_used':True}
 (root/'stravia-native-request-model-tests.json').write_text(json.dumps(report,indent=2));print(json.dumps(report),flush=True)
+with sqlite3.connect('/var/lib/stravia/db/gateway.db',timeout=30) as db:
+ key=db.execute('SELECT id FROM api_keys WHERE name=?',('GPT-Private',)).fetchone()[0]
+ assert db.execute('UPDATE artifacts SET expires_at=0 WHERE id=? AND principal=? AND state=? AND storage_backend=?',(spec['artifact_id'],'api-key:'+key,'ready','internal')).rowcount==1
 assert directory.resolve()==pathlib.Path('/root/stravia-request-model-tests-run');shutil.rmtree(directory)
