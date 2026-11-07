@@ -44,7 +44,7 @@ async fn install(
 ) -> Response {
     let component = match component_body(&headers, body) {
         Ok(component) => component,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match gateway.admin().install_platform_plugin(component).await {
         Ok(plugin) => success(plugin),
@@ -60,7 +60,7 @@ async fn replace(
 ) -> Response {
     let component = match component_body(&headers, body) {
         Ok(component) => component,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match gateway
         .admin()
@@ -75,26 +75,26 @@ async fn replace(
 fn component_body(
     headers: &HeaderMap,
     body: Result<Bytes, BytesRejection>,
-) -> Result<Vec<u8>, Response> {
+) -> Result<Vec<u8>, Box<Response>> {
     if headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_none_or(|value| !value.eq_ignore_ascii_case("application/wasm"))
     {
-        return Err(failure(
+        return Err(Box::new(failure(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "Content-Type must be application/wasm",
-        ));
+        )));
     }
     let body = match body {
         Ok(body) => body,
-        Err(rejection) => return Err(rejection.into_response()),
+        Err(rejection) => return Err(Box::new(rejection.into_response())),
     };
     if body.is_empty() {
-        return Err(failure(
+        return Err(Box::new(failure(
             StatusCode::BAD_REQUEST,
             "plugin component body must not be empty",
-        ));
+        )));
     }
     Ok(body.to_vec())
 }
