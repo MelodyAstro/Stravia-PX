@@ -126,10 +126,13 @@ explicit source of retained settings.
 
 Enabled plugin tools are exposed to ordinary generation requests. Fixed Agent
 tool allowlists remain authoritative; plugin tools can be included explicitly.
+An Agent definition references `{ "id": "platform-plugin:<plugin-id>:<tool-name>",
+"version": 1 }` in its tool allowlist.
 MCP `tools/list` and `tools/call` discover currently enabled tools, with the
 same authentication and visibility path as existing platform tools. Public
-names have the form `plugin_<readable-name>_<identity-hash>` to avoid collisions
-with built-ins and other installations. Discover the actual name through MCP
+MCP names have the form `plugin_<readable-name>_<identity-hash>`; inference tool
+names additionally use the existing `stravia__` prefix. These identities avoid
+collisions with built-ins and other installations. Discover the actual name through MCP
 or the existing tool registry instead of constructing it by hand.
 
 An Agent run pins one plugin snapshot for its entire execution. An MCP call
