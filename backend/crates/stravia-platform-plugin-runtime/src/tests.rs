@@ -79,7 +79,7 @@ async fn rejects_invalid_manifests_and_forbidden_imports() -> Result<()> {
             .err()
             .expect("forbidden import rejected");
         assert!(
-            error.to_string().contains("forbidden interface"),
+            format!("{error:#}").contains("forbidden interface"),
             "{error:#}"
         );
     }

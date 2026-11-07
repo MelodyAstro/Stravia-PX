@@ -116,6 +116,63 @@ async fn install_settings_restart_and_failed_update_preserve_the_committed_plugi
 }
 
 #[tokio::test]
+async fn replacement_requires_the_installed_identity_and_preserves_settings_on_rejection() {
+    let directory = tempfile::tempdir().unwrap();
+    let manager = PlatformPlugins::open(directory.path()).await.unwrap();
+    let bytes = fixture();
+    let expected_id = "example.policy-tools";
+    assert!(manager.replace(expected_id, bytes.clone()).await.is_err());
+    assert!(manager.list().is_empty());
+    assert!(
+        !directory
+            .path()
+            .join("platform-plugins/installed.json")
+            .exists()
+    );
+    assert_eq!(
+        std::fs::read_dir(directory.path().join("platform-plugins/artifacts"))
+            .unwrap()
+            .count(),
+        0
+    );
+
+    let installed = manager.install(bytes.clone()).await.unwrap();
+    assert_eq!(installed.manifest.id, expected_id);
+    manager
+        .update(
+            expected_id,
+            PlatformPluginUpdate {
+                enabled: Some(true),
+                config: Some(json!({"system":"keep this policy"})),
+            },
+        )
+        .await
+        .unwrap();
+    let metadata_path = directory.path().join("platform-plugins/installed.json");
+    let before = std::fs::read(&metadata_path).unwrap();
+    let rejected = manager
+        .replace("another.plugin", bytes.clone())
+        .await
+        .err()
+        .expect("a different package identity must be rejected");
+    assert!(rejected.to_string().contains("identity"));
+    let current = manager.list();
+    assert_eq!(current.len(), 1);
+    assert!(current[0].enabled);
+    assert_eq!(current[0].config, json!({"system":"keep this policy"}));
+    assert_eq!(current[0].sha256, installed.sha256);
+    assert_eq!(std::fs::read(&metadata_path).unwrap(), before);
+    assert_eq!(manager.snapshot().len(), 1);
+
+    let replaced = manager.replace(expected_id, bytes.clone()).await.unwrap();
+    assert!(!replaced.enabled);
+    assert_eq!(replaced.config, json!({"system":"keep this policy"}));
+    manager.uninstall(expected_id).await.unwrap();
+    assert!(manager.replace(expected_id, bytes).await.is_err());
+    assert!(manager.list().is_empty());
+}
+
+#[tokio::test]
 async fn hook_and_tool_requests_pin_config_and_survive_disable_and_uninstall() {
     let directory = tempfile::tempdir().unwrap();
     let manager = PlatformPlugins::open(directory.path()).await.unwrap();
