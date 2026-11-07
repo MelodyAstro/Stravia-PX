@@ -45,6 +45,15 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     steps:
+      - name: Reserve space for workspace cache archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h .
+          # This disposable Linux runner builds Rust/Wasm and WebUI only.
+          # Leave enough space for both target outputs and the cache archive.
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet
+          df -h .
       - uses: actions/checkout@v6
         with:
           persist-credentials: false

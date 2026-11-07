@@ -56,6 +56,9 @@ workspace compilation results, including on a later test failure. This avoids
 an existing dependency-cache hit preventing newly compiled workspace files from
 being saved. Tests always run; Cargo still checks freshness after restoring
 outputs, and changed source inputs select a new workspace cache.
+The disposable Linux runner removes its unused Android and .NET toolchains
+before building, leaving room for both compilation outputs and the compressed
+cache archive. This cleanup never targets the repository or deployment hosts.
 
 For a cache-only maintenance run, use **Run workflow → tools_only = true**.
 It compiles or restores the helper and Wasm components, verifies their digests,
