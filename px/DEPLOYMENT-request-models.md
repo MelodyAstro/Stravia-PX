@@ -8,6 +8,9 @@
 
 - GPT-Private 与 All 已各启用 8 条短名称映射，客户端可发送 `gpt-6-luna` 等名称。
   原 Key 和 Base URL 保持不变：OpenAI `/comments`，Anthropic `/reviews`。
+- GPT Responses WS 主入口：`wss://masub-ex.retlinks.top/comments/responses`；
+  Cloudflare：`wss://masub-ex.yuhatze.org/comments/responses`。使用原 Key 和短模型名，
+  两入口已完成实际 WebSocket 响应及工具往返验证。
 - API Keys → 已有 Key → 请求模型映射，可设置开关、自定义名称和授权目标。
   三分钟识别记录模型、协议、传输方式和数量，并提供候选；保存后才生效。
   识别不保存聊天正文、headers、密钥或工具 Schema，结果十五分钟过期。

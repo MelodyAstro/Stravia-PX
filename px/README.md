@@ -24,6 +24,15 @@ Private 内部路由使用 `private/`，Team 使用 `team/`。启用 Key 的请�
 使用 `gpt-6-luna` 等短名称，无需使用内部前缀。
 客户端 Base URL 的 OpenAI 前缀为 `/comments`，Anthropic 前缀为 `/reviews`。
 
+| 入口 | OpenAI HTTP Base URL | GPT Responses WebSocket 完整地址 |
+| --- | --- | --- |
+| 主域名 | `https://masub-ex.retlinks.top/comments` | `wss://masub-ex.retlinks.top/comments/responses` |
+| Cloudflare | `https://masub-ex.yuhatze.org/comments` | `wss://masub-ex.yuhatze.org/comments/responses` |
+
+WebSocket 沿用原分组 Key（`Authorization: Bearer <Key>`）和短模型名，如 `gpt-6-luna`。
+客户端若只提供 HTTP Base URL 配置，仍填写 HTTPS Base；上表 WSS 为完整 Responses 端点。
+两条 WSS 入口均已验证完整响应和工具结果往返。
+
 ## 原生构建
 
 遵循上游 `AGENTS.md`、`rust-toolchain.toml` 和 `Taskfile.yml`。构建不需要 Docker：
