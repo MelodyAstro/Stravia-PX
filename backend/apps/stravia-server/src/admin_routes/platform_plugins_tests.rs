@@ -24,6 +24,12 @@ async fn platform_plugins_all_management_routes_require_admin() -> anyhow::Resul
             "{\"enabled\":true}",
         ),
         (
+            "POST",
+            "/api/v1/platform-plugins/example",
+            "application/wasm",
+            "invalid",
+        ),
+        (
             "DELETE",
             "/api/v1/platform-plugins/example",
             "application/json",
@@ -134,7 +140,40 @@ async fn platform_plugins_http_install_update_disable_and_uninstall() -> anyhow:
         "Use concise answers."
     );
 
-    let response = app.clone().oneshot(upload()?).await?;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/platform-plugins/different-plugin")
+                .header("authorization", &auth)
+                .header("content-type", "application/wasm")
+                .body(Body::from(component.clone()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/platform-plugins")
+                .header("authorization", &auth)
+                .body(Body::empty())?,
+        )
+        .await?;
+    let unchanged: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await?)?;
+    assert_eq!(
+        unchanged["data"],
+        serde_json::json!([configured["data"].clone()])
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/platform-plugins/example.policy-tools")
+                .header("authorization", &auth)
+                .header("content-type", "application/wasm")
+                .body(Body::from(component.clone()))?,
+        )
+        .await?;
     assert_eq!(response.status(), StatusCode::OK);
     let updated: serde_json::Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await?)?;

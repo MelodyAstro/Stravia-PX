@@ -22,6 +22,14 @@ impl AdminService {
         self.gw.platform_plugins.update(id, input).await
     }
 
+    pub async fn replace_platform_plugin(
+        &self,
+        id: &str,
+        component: Vec<u8>,
+    ) -> anyhow::Result<crate::platform_plugins::PlatformPluginSummary> {
+        self.gw.platform_plugins.replace(id, component).await
+    }
+
     pub async fn uninstall_platform_plugin(&self, id: &str) -> anyhow::Result<()> {
         self.gw.platform_plugins.uninstall(id).await
     }

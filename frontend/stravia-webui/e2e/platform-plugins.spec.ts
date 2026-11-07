@@ -148,3 +148,43 @@ test('Chinese plugin configuration remains usable in a narrow dark layout', asyn
   })
   await page.screenshot({ path: '../../.scratch/platform-plugins-zh-dark-mobile.png' })
 })
+
+test('updating a row sends its expected identity and preserves an enabled plugin when rejected', async ({ page }) => {
+  await prepareApp(page)
+  const plugin = { ...initialPlugin, enabled: true }
+  let generalInstalls = 0
+  let targetedUpdates = 0
+  await page.route('**/api/v1/platform-plugins', async (route) => {
+    if (route.request().method() === 'POST') generalInstalls += 1
+    await route.fulfill({ json: { data: [plugin] } })
+  })
+  await page.route('**/api/v1/platform-plugins/example.policy-tools', async (route) => {
+    expect(route.request().method()).toBe('POST')
+    expect(route.request().headers()['content-type']).toBe('application/wasm')
+    targetedUpdates += 1
+    await route.fulfill({ status: 400, json: { error: 'Plugin identity does not match the update target' } })
+  })
+
+  await page.goto('/platform-plugins')
+  const row = page.locator('[data-plugin-id="example.policy-tools"]')
+  await expect(row.getByRole('switch')).toBeChecked()
+  const fileChooser = page.waitForEvent('filechooser')
+  await row.getByRole('button', { name: 'Update from file', exact: true }).click()
+  await (
+    await fileChooser
+  ).setFiles({
+    name: 'different-plugin.wasm',
+    mimeType: 'application/wasm',
+    buffer: Buffer.from([0, 97, 115, 109, 13, 0, 1, 0]),
+  })
+  await expect(page.getByText('Plugin identity does not match the update target', { exact: true })).toBeVisible()
+  expect(targetedUpdates).toBe(1)
+  expect(generalInstalls).toBe(0)
+  await expect(row.getByRole('switch')).toBeChecked()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await row.getByRole('button', { name: 'Configure', exact: true }).click()
+  const editor = page.getByRole('dialog', { name: plugin.manifest.name })
+  await expect(editor.getByLabel('Configuration (JSON)', { exact: true })).toHaveValue(
+    JSON.stringify(plugin.config, null, 2),
+  )
+})

@@ -68,7 +68,7 @@ async function installFile(event: Event): Promise<void> {
   }
   importing = true
   try {
-    const plugin = await admin.platformPlugins.install(file)
+    const plugin = await admin.platformPlugins.install(file, updateId)
     queryClient.setQueryData<PlatformPluginSummary[]>(['platform-plugins'], (current = []) =>
       [...current.filter((item) => item.manifest.id !== plugin.manifest.id), plugin].sort((a, b) =>
         a.manifest.id.localeCompare(b.manifest.id),

@@ -66,7 +66,8 @@ The manifest is immutable metadata and includes:
 The host validates metadata, contract compatibility and SHA256 before admitting
 the component. A descriptor must be consistent across fresh instances. Uploads
 with the same `id` replace that installation; use a different identity for a
-separate plugin.
+separate plugin. The row's **Update from file** action additionally verifies
+the uploaded identity matches that installed row before changing anything.
 
 ## Hook protocol
 
@@ -176,6 +177,7 @@ CSRF checks for browser writes, and return `Cache-Control: no-store`.
 | --- | --- |
 | `GET /api/v1/platform-plugins` | Installed summaries |
 | `POST /api/v1/platform-plugins` | Raw `application/wasm`; installs/replaces and returns a disabled summary |
+| `POST /api/v1/platform-plugins/{id}` | Raw `application/wasm`; replaces only the matching installed identity |
 | `PUT /api/v1/platform-plugins/{id}/settings` | Optional `enabled` and `config` fields; commits both atomically |
 | `DELETE /api/v1/platform-plugins/{id}` | Uninstalls the active entry |
 

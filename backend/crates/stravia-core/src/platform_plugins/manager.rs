@@ -152,17 +152,45 @@ impl PlatformPlugins {
         // Once admitted, a mutation owns its commit even if the HTTP caller
         // disconnects. Dropping its JoinHandle does not drop the writer lock.
         let manager = Arc::clone(self);
-        tokio::spawn(async move { manager.install_inner(component).await })
+        tokio::spawn(async move { manager.install_inner(component, None).await })
             .await
             .context("platform plugin installation task failed")?
     }
 
-    async fn install_inner(&self, component: Vec<u8>) -> anyhow::Result<PlatformPluginSummary> {
+    pub(crate) async fn replace(
+        self: &Arc<Self>,
+        id: &str,
+        component: Vec<u8>,
+    ) -> anyhow::Result<PlatformPluginSummary> {
+        let manager = Arc::clone(self);
+        let id = id.to_owned();
+        tokio::spawn(async move { manager.install_inner(component, Some(id)).await })
+            .await
+            .context("platform plugin replacement task failed")?
+    }
+
+    async fn install_inner(
+        &self,
+        component: Vec<u8>,
+        expected_id: Option<String>,
+    ) -> anyhow::Result<PlatformPluginSummary> {
         // Validate and compile before taking the mutation lock or replacing an installation.
         let loaded = self.runtime.load(component.clone()).await?;
         validate_manifest(loaded.manifest())?;
+        if let Some(expected_id) = &expected_id {
+            ensure!(
+                loaded.manifest().id == *expected_id,
+                "plugin package identity does not match the selected plugin"
+            );
+        }
         let _mutation = self.mutations.lock().await;
         let mut next = self.entries.read().clone();
+        if let Some(expected_id) = expected_id {
+            ensure!(
+                next.contains_key(&expected_id),
+                "platform plugin is not installed"
+            );
+        }
         let manifest = loaded.manifest().clone();
         let config = next
             .get(&manifest.id)
