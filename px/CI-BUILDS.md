@@ -51,3 +51,16 @@ and saves a cache without rebuilding the unchanged server or emitting a release
 package. A normal push or manual run with the option off performs all tests and
 builds the deployable package. This also permits a second cache-only run to
 verify that the exact compiled cache is reused.
+
+## Verified runs (2026-11-07)
+
+- [Full native build](https://github.com/MelodyAstro/Stravia-PX/actions/runs/42367922887)
+  passed protocol/Core checks, built the server and uploaded the private native
+  package (`5fa4ad72e191245622b8b728cf0e6ea455ad3835`).
+- [Compiled cache population](https://github.com/MelodyAstro/Stravia-PX/actions/runs/42373121365)
+  built the tooling/components, recorded their digests, and saved the cache.
+- [Exact cache reuse](https://github.com/MelodyAstro/Stravia-PX/actions/runs/42373946853)
+  verified the restored binary digests and skipped both tool and managed Wasm
+  compilation. No server rebuild or deployment was performed in cache-only mode.
+
+The cache verification runs use commit `5965295e77d5887b2f6ec7df337ff8cee2c428b6`.
