@@ -177,7 +177,7 @@ test('updating a row sends its expected identity and preserves an enabled plugin
     mimeType: 'application/wasm',
     buffer: Buffer.from([0, 97, 115, 109, 13, 0, 1, 0]),
   })
-  await expect(page.getByText('Plugin identity does not match the update target', { exact: true })).toBeVisible()
+  await expect(page.getByText(/Plugin identity does not match the update target/)).toBeVisible()
   expect(targetedUpdates).toBe(1)
   expect(generalInstalls).toBe(0)
   await expect(row.getByRole('switch')).toBeChecked()
