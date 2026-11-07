@@ -101,6 +101,7 @@ Responses 受管理主程序的 manifest 增加：
   两域名 HTTP/WebSocket 与工具往返、权限、识别和静态资源。会实际调用上游；
   需同目录对应脚本在服务器命名为 `/root/verify-stravia-responses-streams.py`，
   以及既有 root 私有认证助手和凭据。完成后恢复原映射并清空识别。
+  同目录需保留 `stravia_verify_webui.py`，网页探测使用浏览器 User-Agent。
 - `ops/verify-claude-code-compat.py` 验证 Sonnet、Opus 的 7 消息/38 工具/32000 上限
   合成 CC 请求和字典工具结果往返；保持兼容开关开启，不需要真实聊天捕获。
 

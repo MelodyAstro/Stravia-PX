@@ -3,6 +3,10 @@
 自用的 Stravia 补丁与原生部署维护记录。基线为官方 **v0.6.4**
 （`a100ef42031073fbdd779e4809fb83cac3a8b956`），保留官方源码历史及 AGPL-3.0 许可证。
 
+改版发布在私库 `main`，`px/v0.6.4` 保留同一维护线，`upstream` 指向官方。
+最新状态见 [请求映射部署记录](DEPLOYMENT-request-models.md)，备份与清理见
+[恢复说明](RECOVERY.md)。
+
 ## 当前补丁
 
 - **GA / Claude Code**：保留 `claude_code_compat` 开关，只作用于 Antigravity 的

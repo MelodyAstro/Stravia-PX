@@ -5,6 +5,8 @@ existing root-only access file and never prints them or response content.
 """
 import copy, hashlib, http.client, importlib.util, json, pathlib, re, sqlite3, subprocess, time, urllib.request
 
+from stravia_verify_webui import verify_hosts
+
 root = pathlib.Path('/root')
 module_spec = importlib.util.spec_from_file_location('client', root / 'stravia-client.py')
 module = importlib.util.module_from_spec(module_spec)
@@ -127,17 +129,10 @@ try:
     assert status == 403
     record('cross-group-inference-denied', status=status)
 
-    pages = []
-    for host in ['masub-ex.yuhatze.org', 'masub-ex.retlinks.top']:
-        with urllib.request.urlopen('https://' + host + '/login', timeout=60) as response:
-            html = response.read().decode()
-            assert response.status == 200 and 'no-store' in response.headers.get('Cache-Control', '')
-        entry = re.search(r'(/_app/immutable/entry/[^\"\s]+\.js)', html)
-        assert entry
-        with urllib.request.urlopen('https://' + host + entry.group(1), timeout=60) as response:
-            assert response.status == 200 and 'immutable' in response.headers.get('Cache-Control', '')
-        pages.append(host)
-    record('webui-and-immutable-assets', passed=True, hosts=pages)
+    (root / 'stravia-request-model-functional-checkpoint.json').write_text(json.dumps({'passed': True, 'results': results}, indent=2))
+    pages = verify_hosts(['masub-ex.yuhatze.org', 'masub-ex.retlinks.top'])
+    record('webui-and-immutable-assets', passed=True, results=pages)
+
 finally:
     assert client.call('PUT', path, saved)['data']['config'] == saved
     client.call('DELETE', path + '/capture')
