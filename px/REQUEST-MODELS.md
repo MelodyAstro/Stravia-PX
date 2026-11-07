@@ -21,6 +21,10 @@ Responses HTTP/SSE、WebSocket、Chat Completions、Anthropic 等使用共享的
 媒体能力查询也解析相同映射。配置只改变目标选择，不改写消息、工具定义或上游模型名。
 响应和续接仍使用客户端请求名称。
 
+GPT Responses 的 WebSocket 完整地址为
+`wss://gateway.example.com/comments/responses`，备用为
+`wss://gateway.example.com/comments/responses`。沿用原 Key 和映射后的短模型名。
+
 请求名称大小写敏感，允许 1–160 个 ASCII 字母、数字和 `._-/:`，每个 Key 最多 128 条。
 同一 Key 的请求名称不能重复，也不能覆盖内部 Route key；不同 Key 可使用相同名称。
 目标保存的是稳定的路由 key，重命名目标的公开模型名不会改变绑定。目标删除、停用或
