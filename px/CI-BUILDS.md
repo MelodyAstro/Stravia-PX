@@ -20,3 +20,7 @@ Deployment remains a separate maintenance action: back up the server, preserve
 all managed feature flags, install matching host/components, and run complete
 HTTP/SSE and WSS tool round trips. CI has no SSH key, account tokens, API keys,
 or production data and cannot deploy automatically.
+
+The original full upstream CI matrix stays available for pull requests and
+manual dispatch. Fork pushes use the native PX lane to avoid duplicate desktop,
+PostgreSQL, and container test jobs on every server patch.
