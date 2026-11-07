@@ -47,6 +47,7 @@ async fn request_models_route_same_bare_name_by_key_and_preserve_response_name()
     let (private_url, private_calls) = serve_sse_sequence(vec![
         openai_sse("private reply"),
         openai_sse("private stream"),
+        openai_sse("custom reply"),
     ])
     .await;
     let (team_url, team_calls) = serve_sse_sequence(vec![openai_sse("team reply")]).await;
@@ -104,8 +105,42 @@ async fn request_models_route_same_bare_name_by_key_and_preserve_response_name()
     .unwrap();
     assert!(body.contains("response.completed"), "{body}");
     assert!(body.contains("private stream"), "{body}");
+    for line in body.lines().filter_map(|line| line.strip_prefix("data: ")) {
+        if let Ok(event) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(model) = event.pointer("/response/model")
+        {
+            assert_eq!(model, "gpt-6-luna");
+        }
+    }
     assert_eq!(private_calls.load(Ordering::SeqCst), 2);
     assert_eq!(team_calls.load(Ordering::SeqCst), 1);
+    let mut custom = config(&private);
+    custom.mappings.push(RequestModelMapping {
+        request_model: "my-custom-luna".into(),
+        target_model_id: private.clone(),
+    });
+    gateway
+        .admin()
+        .update_request_models(&private_key.id, custom)
+        .await
+        .unwrap();
+    let response = execute_non_stream_request_with_headers(
+        gateway.clone(),
+        headers(&private_key),
+        AiRequest::new("my-custom-luna", Vec::new()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["model"], "my-custom-luna");
+    assert!(body.to_string().contains("custom reply"));
+    assert_eq!(private_calls.load(Ordering::SeqCst), 3);
+    gateway
+        .admin()
+        .update_request_models(&private_key.id, config(&private))
+        .await
+        .unwrap();
     let all = gateway
         .admin()
         .create_api_key(

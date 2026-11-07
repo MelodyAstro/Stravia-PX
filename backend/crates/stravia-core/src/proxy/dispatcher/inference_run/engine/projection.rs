@@ -543,6 +543,7 @@ struct ClosedThinking {
 /// Model Leg boundaries only reset the staged cursor; they never reset the
 /// run-wide state.
 pub(super) struct ClientProjectionSession {
+    request_model: Option<String>,
     state: ProjectionState,
     marker_store: Arc<dyn HistoryMarkerStore>,
     principal: Principal,
@@ -585,6 +586,7 @@ impl ClientProjectionSession {
         ingress: stravia_runtime_contract::protocol::ids::ProtocolId,
     ) -> Self {
         Self {
+            request_model: None,
             state: ProjectionState::for_ingress(ingress),
             marker_store,
             principal,
@@ -630,11 +632,20 @@ impl ClientProjectionSession {
         self
     }
 
+    pub(super) fn with_request_model(mut self, model: Option<String>) -> Self {
+        self.request_model = model;
+        self
+    }
+
     /// Copy only at the transport boundary, after canonical persistence staging.
-    pub(super) async fn prepare_upload_delivery<'a>(
+    pub(super) async fn prepare_response_delivery<'a>(
         &mut self,
         response: &'a AiResponse,
     ) -> Result<std::borrow::Cow<'a, AiResponse>, HistoryMarkerError> {
+        let mut delivered = std::borrow::Cow::Borrowed(response);
+        if let Some(model) = &self.request_model {
+            delivered.to_mut().model = model.clone();
+        }
         let hidden_count = response.items.len().saturating_sub(self.staged_item_count);
         let has_candidate = response.items.iter().enumerate().any(|(index, item)| {
             let eligible = if index < hidden_count {
@@ -648,14 +659,13 @@ impl ClientProjectionSession {
             eligible && UploadProjection::item_candidate(item, UPLOAD_PLACEHOLDER)
         });
         if !has_candidate {
-            return Ok(std::borrow::Cow::Borrowed(response));
+            return Ok(delivered);
         }
         self.upload.refresh().await?;
         if !self.upload.enabled {
-            return Ok(std::borrow::Cow::Borrowed(response));
+            return Ok(delivered);
         }
-        let mut delivered = response.clone();
-        for (index, item) in delivered.items.iter_mut().enumerate() {
+        for (index, item) in delivered.to_mut().items.iter_mut().enumerate() {
             let eligible = if index < hidden_count {
                 self.hidden_upload_items
                     .get(index)
@@ -668,7 +678,7 @@ impl ClientProjectionSession {
                 self.upload.replace_item(item, &self.principal)?;
             }
         }
-        Ok(std::borrow::Cow::Owned(delivered))
+        Ok(delivered)
     }
 
     pub(super) fn model_leg_ordinal(&self) -> usize {
@@ -968,6 +978,13 @@ impl ClientProjectionSession {
         mut deltas: Vec<AiStreamDelta>,
         model_leg_completed: bool,
     ) -> Result<Vec<ProjectedDeltaBatch>, HistoryMarkerError> {
+        if let Some(request_model) = &self.request_model {
+            for delta in &mut deltas {
+                if let AiStreamDelta::MessageStart { model, .. } = delta {
+                    *model = request_model.clone();
+                }
+            }
+        }
         deltas = self.filter_platform_deltas(deltas);
         if !self.upload.pending.is_empty() || deltas.iter().any(UploadProjection::candidate) {
             self.upload.refresh().await?;
@@ -2529,6 +2546,30 @@ mod tests {
         ANTHROPIC_MESSAGES_2023_06_01, GOOGLE_GEMINI_GENERATE_CONTENT_V1BETA,
         OPEN_RESPONSES_2026_04_24,
     };
+
+    #[tokio::test]
+    async fn request_models_project_wire_name_without_changing_canonical_response() {
+        let (mut session, _, _) = projection_session_fixture("mapping-projection").await;
+        let canonical = AiResponse::new("upstream-id", "actual-upstream-model");
+        let original = session.prepare_response_delivery(&canonical).await.unwrap();
+        assert!(matches!(original, std::borrow::Cow::Borrowed(_)));
+        session = session.with_request_model(Some("custom-luna".into()));
+        let delivered = session.prepare_response_delivery(&canonical).await.unwrap();
+        assert_eq!(delivered.model, "custom-luna");
+        assert_eq!(canonical.model, "actual-upstream-model");
+        let batches = session
+            .project_live_deltas(
+                vec![AiStreamDelta::MessageStart {
+                    id: "upstream-id".into(),
+                    model: "actual-upstream-model".into(),
+                }],
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(batches.iter().flat_map(|batch| batch.deltas()).any(|delta|
+            matches!(delta, AiStreamDelta::MessageStart { model, .. } if model == "custom-luna")));
+    }
 
     fn replay_source(
         protocol: impl Into<stravia_runtime_contract::protocol::ids::ProtocolIdentity>,

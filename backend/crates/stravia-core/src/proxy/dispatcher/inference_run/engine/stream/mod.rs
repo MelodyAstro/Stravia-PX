@@ -319,7 +319,7 @@ pub(super) async fn handle_model_turn_stream(input: ModelTurnStreamInput) -> Rou
                         pending_generation_chain = hook_generation_chain.map(|chain| *chain);
                         if !buffer_terminal_hooks {
                             let delivered_response =
-                                match projection.prepare_upload_delivery(&response).await {
+                                match projection.prepare_response_delivery(&response).await {
                                     Ok(response) => Some(response),
                                     Err(error) => {
                                         aborted = true;
@@ -436,7 +436,7 @@ pub(super) async fn handle_model_turn_stream(input: ModelTurnStreamInput) -> Rou
                 && !aborted
                 && !transport.disrupted()
             {
-                match projection.prepare_upload_delivery(&response).await {
+                match projection.prepare_response_delivery(&response).await {
                     Ok(delivered) => ledger.terminal.stage_client_output(ingress, delivered.as_ref()),
                     Err(error) => observer.record(crate::interaction_observation::RunEvent::ObservationGap {
                         reason: format!("client_history_projection_unavailable: {error}"),
@@ -515,7 +515,7 @@ pub(super) async fn handle_model_turn_stream(input: ModelTurnStreamInput) -> Rou
                 && !aborted
                 && !transport.disrupted()
             {
-                let delivered_response = match projection.prepare_upload_delivery(&response).await {
+                let delivered_response = match projection.prepare_response_delivery(&response).await {
                     Ok(response) => Some(response),
                     Err(error) => {
                         aborted = true;
