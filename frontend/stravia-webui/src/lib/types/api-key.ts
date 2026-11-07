@@ -1,5 +1,33 @@
 import type { ApiKeySpend } from './money'
 
+export interface RequestModelMapping {
+  request_model: string
+  target_model_id: string
+}
+export interface RequestModelConfig {
+  enabled: boolean
+  mappings: RequestModelMapping[]
+}
+export interface RequestModelsView {
+  config: RequestModelConfig
+  eligible_models: { id: string; model_id: string; display_name: string }[]
+  capture: {
+    active: boolean
+    expires_at: string | null
+    dropped_samples: number
+    samples: {
+      request_model: string
+      protocol: string
+      transport: string
+      stream: boolean
+      input_items: number
+      tools: number
+      count: number
+    }[]
+  }
+  suggestions: { request_model: string; target_model_id: string | null; candidates: string[] }[]
+}
+
 export interface ApiKey {
   id: string
   key: string

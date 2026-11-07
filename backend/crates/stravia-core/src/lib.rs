@@ -31,6 +31,7 @@ pub mod protocol;
 pub mod provider_catalog;
 pub mod provider_models;
 pub mod proxy;
+pub mod request_models;
 pub(crate) mod reversible_redaction;
 pub mod router;
 pub mod rpm;

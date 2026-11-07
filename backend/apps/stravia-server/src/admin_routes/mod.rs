@@ -254,6 +254,14 @@ fn create_router_inner(gateway: Gateway, auth: Option<AdminHttpState>) -> Router
             post(reset_api_key_spend_handler),
         )
         .route("/api-keys/{id}", api_keys_item)
+        .route(
+            "/api-keys/{id}/request-models",
+            get(get_request_models).put(update_request_models),
+        )
+        .route(
+            "/api-keys/{id}/request-models/capture",
+            post(capture_request_models).delete(clear_request_model_capture),
+        )
         .route("/reversible-redaction/rules", get(credential_rules))
         .route(
             "/reversible-redaction/disabled-rules",

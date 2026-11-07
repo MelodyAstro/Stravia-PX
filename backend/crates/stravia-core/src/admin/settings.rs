@@ -2,6 +2,10 @@ use super::*;
 
 fn reject_removed_proxy_setting(key: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
+        !key.starts_with(crate::request_models::SETTING_PREFIX),
+        "Request model mappings are managed through the API Key request models API"
+    );
+    anyhow::ensure!(
         !matches!(
             key,
             "proxy_enabled" | "proxy_url" | "proxy_bypass" | "proxy_force_http1"

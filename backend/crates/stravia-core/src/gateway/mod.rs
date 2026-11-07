@@ -77,6 +77,7 @@ pub struct Gateway {
     pub(crate) principal_admission: Arc<admission::PrincipalAdmission>,
     pub(crate) rpm_admission: crate::rpm::TargetAdmission,
     pub model_cache: Arc<tokio::sync::RwLock<router::RouteCache>>,
+    pub(crate) request_model_capture: crate::request_models::CaptureStore,
     pub(crate) cache_affinity: router::cache_affinity::CacheAffinity,
     pub(crate) route_policy_state: router::RoutePolicyState,
     /// Current custom-currency snapshot; replaced after a committed admin write.
@@ -143,6 +144,7 @@ impl Gateway {
             principal_admission: Arc::clone(&self.principal_admission),
             rpm_admission: self.rpm_admission.clone(),
             model_cache: Arc::clone(&self.model_cache),
+            request_model_capture: self.request_model_capture.clone(),
             cache_affinity: self.cache_affinity.clone(),
             route_policy_state: self.route_policy_state.clone(),
             custom_currency: Arc::clone(&self.custom_currency),

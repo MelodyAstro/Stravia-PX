@@ -13,7 +13,15 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
-  use: { baseURL, colorScheme: 'light', screenshot: 'only-on-failure', trace: 'retain-on-failure' },
+  use: {
+    baseURL,
+    colorScheme: 'light',
+    screenshot: 'only-on-failure',
+    trace: 'retain-on-failure',
+    launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+      ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
+      : {},
+  },
   webServer: {
     // `vite preview` crashes under Bun 1.4.x (oven-sh/bun#40350); the dedicated
     // Bun.serve static server in scripts/preview-server.ts avoids that path.

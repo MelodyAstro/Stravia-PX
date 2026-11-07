@@ -21,6 +21,8 @@ history, and usage — desktop app or single binary.
 
 </div>
 
+> **Stravia-PX:** This fork adds per-API-Key request model mappings, limited request recognition, and Claude/Codex compatibility patches. See [fork configuration and native upgrade instructions](px/README.md).
+
 ![Request Records — every client request, traced live](docs/assets/request-records.png)
 
 > **Status:** Stravia is pre-1.0 and under active development. Configuration and database compatibility may change before a stable release.

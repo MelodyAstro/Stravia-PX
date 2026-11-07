@@ -97,6 +97,7 @@ def responses_upgrade_plan(version):
  candidate=json.loads((staged/'manifest.json').read_text())
  assert candidate['upstream_tag']==version and candidate['vendor_id']==(active['vendor_id'] if active else 'openai-codex'),'Staged Responses compatibility target mismatch'
  assert candidate['version'].split('+')[0]==version.removeprefix('v'),'Staged Responses component version mismatch'
+ assert set((active or {}).get('features',[])).issubset(set(candidate.get('features',[]))),'Staged host is missing managed compatibility features; retain request model mappings and other active patches'
  for key in ['host_binary','component']:
   assert pathlib.Path(candidate[key]).name==candidate[key],'Invalid staged Responses filename'
  assert digest(staged/candidate['host_binary'])==candidate['host_sha256'],'Staged Responses host checksum mismatch'

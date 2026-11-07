@@ -102,7 +102,16 @@ impl MediaHost for GatewayHost {
         principal: &Principal,
         model: &str,
     ) -> Result<Option<MediaRoute>, MediaAuthorizationError> {
-        let route = self.0.model_cache.read().await.match_model(model).cloned();
+        let route = crate::request_models::resolve(&self.0, principal, model)
+            .await
+            .map_err(|error| {
+                let error = crate::error::GatewayError::internal(error);
+                MediaAuthorizationError {
+                    status: error.http_status().as_u16(),
+                    code: error.stable_code().into(),
+                    message: error.message(),
+                }
+            })?;
         let Some(route) = route else {
             return Ok(None);
         };

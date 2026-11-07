@@ -13,8 +13,11 @@
   一个会继续拒绝请求或丢失工具定义。组件版本为 `0.6.4+masub.responses.1`。
   无法表达该工具位置语义的跨协议目标会明确拒绝。
 - 包含 v0.6.4 官方的签名思考块顺序修复，更新主程序时同时重建受影响插件。
+- **请求模型映射**：按 Key 配置自定义客户端名称，支持限时识别实际模型名与协议并
+  生成候选；目标仍需通过原有权限检查。见 [配置与识别说明](REQUEST-MODELS.md)。
 
-Private 模型使用完整路由名，例如 `private/gpt-6-luna`；Team 仍使用 `team/`。
+Private 内部路由使用 `private/`，Team 使用 `team/`。启用 Key 的请求映射后，客户端可
+使用 `gpt-6-luna` 等短名称，无需使用内部前缀。
 客户端 Base URL 的 OpenAI 前缀为 `/comments`，Anthropic 前缀为 `/reviews`。
 
 ## 原生构建
@@ -76,7 +79,8 @@ Responses 目标目录至少包含主程序、Codex Wasm、`source.patch` 和 `m
   "host_sha256": "<SHA-256>",
   "component": "stravia-vendor-openai-codex.wasm",
   "sha256": "<SHA-256>",
-  "source_patch_sha256": "<SHA-256>"
+  "source_patch_sha256": "<SHA-256>",
+  "features": ["positional_additional_tools", "per_key_request_model_mapping_v1"]
 }
 ```
 
@@ -87,11 +91,13 @@ Responses 目标目录至少包含主程序、Codex Wasm、`source.patch` 和 `m
 
 若没有匹配目标版本的补丁对，维护工具会在修改运行状态前停止。官方以后修复了相同
 问题时，仍须确认主程序和插件均支持相同语义，再准备目标清单。
+活动清单若含 `features`，目标清单必须包含全部相同标记；模型映射标记为
+`per_key_request_model_mapping_v1`。完整备份包含映射配置，限时识别记录不会持久化。
 
 ## 验证与隐私
 
 - v0.6.4 的 643 个协议测试及 7 个 GA 兼容测试通过。
-- 8 项隔离升级测试覆盖补丁保留、首次安装、摘要篡改、其它插件更新及失败回退。
+- 9 项隔离升级测试覆盖补丁保留、首次安装、摘要篡改、其它插件更新、映射功能标记及失败回退。
 - 3 项隔离恢复测试覆盖元数据同步、补丁出现前的快照及篡改检查。
 - 快照测试验证活动数据与补丁文件完整保留，候选缓存排除，摘要与旧程序指针有效。
 - v0.6.4 已实际部署，完整 Codex HTTP/WebSocket、非默认命名空间工具往返、Claude
@@ -105,7 +111,7 @@ Responses 目标目录至少包含主程序、Codex Wasm、`source.patch` 和 `m
 在已有 root 私有凭据文件的运维环境运行，会实际调用 GPT-Private 上游：
 
 ```sh
-python3 px/ops/verify-responses-streams.py --host <服务域名> --model private/gpt-6-luna
+python3 px/ops/verify-responses-streams.py --host <服务域名> --model gpt-6-luna
 ```
 
 `--access-file` 可指定私有账号文件，`--report` 指定仅含状态/类型/耗时的报告。

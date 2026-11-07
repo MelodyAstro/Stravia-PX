@@ -90,6 +90,14 @@ with tempfile.TemporaryDirectory(prefix='stravia-upgrade-test-') as temporary:
  else:raise AssertionError('Tampered host must fail before switching')
  assert not events
  candidate_host.write_bytes(b'new Responses host')
+ responses_active['features']=['per_key_request_model_mapping_v1']
+ (responses_dir/'manifest.json').write_text(json.dumps(responses_active))
+ try:env['upgrade']('v9.0.0')
+ except AssertionError as error:assert 'missing managed compatibility features' in str(error)
+ else:raise AssertionError('A staged host must preserve active request model mapping support')
+ assert not events
+ candidate['features']=responses_active['features']
+ (responses_staged/'manifest.json').write_text(json.dumps(candidate))
  with contextlib.redirect_stdout(io.StringIO()):env['upgrade']('v9.0.0')
  assert events.index('import-responses')<events.index('import-claude')
  assert 'restore' not in events and events.count('import-claude')==1
@@ -103,4 +111,4 @@ with tempfile.TemporaryDirectory(prefix='stravia-upgrade-test-') as temporary:
  with contextlib.redirect_stdout(io.StringIO()):env['upgrade']('v9.0.0')
  assert events.count('import-responses')==1 and 'restore' not in events
  assert json.loads((responses_dir/'manifest.json').read_text())==candidate
-print(json.dumps({'isolated_upgrade_tests':8,'preserves_managed_ga':True,'updates_other_plugins':True,'incompatible_host_rolls_back':True,'tamper_stops_before_switch':True,'rebuilt_compatibility_installed_atomically':True,'requires_staged_responses_pair':True,'preserves_rebuilt_responses_plugin':True,'first_responses_install_uses_staged_pair':True,'host_uses_verified_hardlink':True}))
+print(json.dumps({'isolated_upgrade_tests':9,'preserves_managed_ga':True,'updates_other_plugins':True,'incompatible_host_rolls_back':True,'tamper_stops_before_switch':True,'rebuilt_compatibility_installed_atomically':True,'requires_staged_responses_pair':True,'preserves_rebuilt_responses_plugin':True,'first_responses_install_uses_staged_pair':True,'host_uses_verified_hardlink':True,'preserves_request_model_mapping_feature':True}))

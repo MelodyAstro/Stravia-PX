@@ -4281,6 +4281,8 @@ mod persist;
 #[cfg(test)]
 mod projection;
 #[cfg(test)]
+mod request_models;
+#[cfg(test)]
 mod reversible_redaction;
 #[cfg(test)]
 mod stream_commit;

@@ -388,7 +388,7 @@ pub(super) async fn orchestrate(
         gateway: gw,
         executor,
         headers,
-        envelope: _,
+        envelope,
         request,
         ingress,
         context: mut ctx,
@@ -443,6 +443,12 @@ pub(super) async fn orchestrate(
     let api_key_name = authenticated_principal.api_key_name;
     let principal = authenticated_principal.principal;
     ingress_observer.set_authenticated_source(principal.api_key_id(), &api_key_name);
+    gw.request_model_capture.observe(
+        principal.api_key_id(),
+        &ingress.to_string(),
+        &envelope,
+        &request,
+    );
     if let Err(error) =
         crate::media::ingest::normalize_request(&gw, &principal, &mut request, &ctx.cancellation)
             .await
@@ -723,11 +729,20 @@ pub(super) async fn orchestrate(
             },
         )
     });
-    let (route_id, model_display_name) = gw
-        .model_cache
-        .read()
-        .await
-        .resolve(&request.model)
+    let resolved_client_model =
+        match crate::request_models::resolve(&gw, &principal, &request.model).await {
+            Ok(model) => model,
+            Err(error) => {
+                return reject_before_admission(
+                    &mut Some(ingress_observer),
+                    "routing",
+                    "model_mapping_configuration",
+                    GatewayError::internal(error).render(Some(&ctx.request_id)),
+                );
+            }
+        };
+    let (route_id, model_display_name) = resolved_client_model
+        .as_ref()
         .map(|model| {
             (
                 model.id.clone().into(),
