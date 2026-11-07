@@ -47,10 +47,11 @@ pointed at Private. See [Team slot configuration](TEAM-SLOTS.md).
 - Initial GPT verification encountered its existing five-hour quota guard at
   100% usage. The tests passed after the upstream window reset naturally;
   guard settings and retry budgets were preserved.
-- GA live replay returned upstream 429 with `Individual quota reached` and an
-  approximately 62-minute reset window. It did not complete at this checkpoint.
-  The installed GA component and compatibility switch are unchanged; its unit
-  tests passed. This quota result is separate from the fixed GPT parser error.
+- GA initially returned upstream 429 with `Individual quota reached`. After its
+  reported quota window elapsed naturally, all four live CC tests passed at
+  13:00 UTC: full Sonnet/Opus requests (7 messages, 38 tools, adaptive thinking,
+  32k output ceiling) and a dictionary tool call/result round trip. The component
+  and compatibility switch remain unchanged. All 52 online response checks passed.
 
 Future builds use [GitHub-hosted native CI and compiled tool caches](CI-BUILDS.md).
 CI packages carry their own source revision and digests; their bytes may differ
@@ -79,3 +80,10 @@ Restore through `stravia-maint restore <archive>` so data and active components
 are restored together. Restoring the before-change snapshot also restores the
 previous Key/model configuration; the Team slot completion can be reapplied
 from its root-only configuration snapshot and the saved current archive.
+
+The current snapshot was downloaded and verified locally, including SQLite
+`quick_check`, foreign keys, six Keys, nineteen routes and all three enabled
+mapping groups. Old cold-backed archives and the obsolete b4 host were then
+removed, freeing 397,818,880 bytes. Server free space was 755,467,264 bytes at
+that checkpoint. Exact current and previous programs and both new hot snapshots
+remain available; older historical restores require restaging their cold host.
