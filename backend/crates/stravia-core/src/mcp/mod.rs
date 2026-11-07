@@ -150,7 +150,10 @@ pub trait McpTool: Send + Sync + 'static {
 #[derive(Clone, Default)]
 pub struct McpToolRegistry {
     tools: Arc<HashMap<String, Arc<dyn McpTool>>>,
-    platform_plugins: Option<Arc<crate::platform_plugins::PlatformPlugins>>,
+    platform_plugins: Option<(
+        Arc<crate::platform_plugins::PlatformPlugins>,
+        crate::storage::DynStorage,
+    )>,
 }
 
 impl McpToolRegistry {
@@ -188,8 +191,9 @@ impl McpToolRegistry {
     pub(crate) fn with_platform_plugins(
         mut self,
         plugins: Arc<crate::platform_plugins::PlatformPlugins>,
+        storage: crate::storage::DynStorage,
     ) -> Self {
-        self.platform_plugins = Some(plugins);
+        self.platform_plugins = Some((plugins, storage));
         self
     }
 
@@ -199,8 +203,8 @@ impl McpToolRegistry {
             .iter()
             .map(|(name, tool)| (name.clone(), Arc::clone(tool)))
             .collect();
-        if let Some(plugins) = &self.platform_plugins {
-            for tool in crate::platform_plugins::mcp_tools(&plugins.snapshot()) {
+        if let Some((plugins, storage)) = &self.platform_plugins {
+            for tool in crate::platform_plugins::mcp_tools(&plugins.snapshot(), storage) {
                 tools.entry(tool.name().to_owned()).or_insert(tool);
             }
         }

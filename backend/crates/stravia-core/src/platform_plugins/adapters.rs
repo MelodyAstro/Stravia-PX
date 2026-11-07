@@ -41,7 +41,10 @@ pub(crate) fn snapshot_hooks(snapshots: &[PluginSnapshot]) -> Vec<Arc<dyn Hook>>
         .collect()
 }
 
-pub(crate) fn mcp_tools(snapshots: &[PluginSnapshot]) -> Vec<Arc<dyn crate::mcp::McpTool>> {
+pub(crate) fn mcp_tools(
+    snapshots: &[PluginSnapshot],
+    storage: &crate::storage::DynStorage,
+) -> Vec<Arc<dyn crate::mcp::McpTool>> {
     snapshots
         .iter()
         .flat_map(|snapshot| {
@@ -51,8 +54,10 @@ pub(crate) fn mcp_tools(snapshots: &[PluginSnapshot]) -> Vec<Arc<dyn crate::mcp:
                 .tools
                 .iter()
                 .map(move |manifest| {
-                    Arc::new(PluginTool::new(snapshot.clone(), manifest.clone()))
-                        as Arc<dyn crate::mcp::McpTool>
+                    Arc::new(PluginMcpTool {
+                        tool: PluginTool::new(snapshot.clone(), manifest.clone()),
+                        storage: Arc::clone(storage),
+                    }) as Arc<dyn crate::mcp::McpTool>
                 })
         })
         .collect()
@@ -147,33 +152,70 @@ impl PlatformTool for PluginTool {
     }
 }
 
+struct PluginMcpTool {
+    tool: PluginTool,
+    storage: crate::storage::DynStorage,
+}
+
+impl PluginMcpTool {
+    async fn authorized(
+        &self,
+        context: &crate::mcp::McpContext,
+    ) -> Result<bool, crate::mcp::McpToolError> {
+        let Some(keys) = self.storage.api_keys() else {
+            return Ok(false);
+        };
+        let key = keys.get(&context.api_key_id).await.map_err(|error| {
+            crate::mcp::McpToolError::new("mcp_access_check_failed", error.to_string())
+        })?;
+        if !key.is_some_and(|key| key.is_enabled && key.mcp_access_enabled) {
+            return Ok(false);
+        }
+        Ok(crate::proxy::security::Security::new(self.storage.auth())
+            .authorize_principal_capability(&stravia_runtime_contract::Principal::new(
+                context.api_key_id.clone(),
+            ))
+            .await
+            .is_ok())
+    }
+}
+
 #[async_trait]
-impl crate::mcp::McpTool for PluginTool {
+impl crate::mcp::McpTool for PluginMcpTool {
     fn name(&self) -> &str {
-        &self.name
+        &self.tool.name
     }
     fn description(&self) -> Option<&str> {
-        Some(&self.manifest.description)
+        Some(&self.tool.manifest.description)
     }
     fn input_schema(&self) -> Value {
-        self.manifest.parameters.clone()
+        self.tool.manifest.parameters.clone()
     }
     async fn available(
         &self,
-        _context: &crate::mcp::McpContext,
+        context: &crate::mcp::McpContext,
     ) -> Result<bool, crate::mcp::McpToolError> {
-        Ok(true)
+        self.authorized(context).await
     }
     async fn call(
         &self,
         arguments: Value,
         context: &crate::mcp::McpContext,
     ) -> Result<crate::mcp::McpToolOutput, crate::mcp::McpToolError> {
+        // Component/configuration snapshots stay pinned for an admitted call;
+        // permission changes must still apply to a retained tool handle.
+        if !self.authorized(context).await? {
+            return Err(crate::mcp::McpToolError::new(
+                "tool_unavailable",
+                "Plugin tool is not available for this API key",
+            ));
+        }
         let cancellation = context
             .execution()
             .map(|(cancellation, _)| cancellation)
             .unwrap_or_default();
         let output = self
+            .tool
             .invoke(arguments, cancellation)
             .await
             .map_err(|error| crate::mcp::McpToolError::new("plugin_failed", error.to_string()))?;

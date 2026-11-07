@@ -161,8 +161,10 @@ pub(super) async fn configure_gateway_extensions(
     let (hook_runtime, read_tool) = hook_runtime_with_web_search(gateway, hooks, tools)?;
     gateway.hook_runtime = hook_runtime;
     mcp_tools.push(Arc::new(read_tool));
-    gateway.mcp_registry = McpToolRegistry::new(mcp_tools)?
-        .with_platform_plugins(Arc::clone(&gateway.platform_plugins));
+    gateway.mcp_registry = McpToolRegistry::new(mcp_tools)?.with_platform_plugins(
+        Arc::clone(&gateway.platform_plugins),
+        Arc::clone(&gateway.storage),
+    );
     Ok(())
 }
 struct GatewayWebSearchAuthorizer {
