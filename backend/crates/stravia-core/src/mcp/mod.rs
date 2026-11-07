@@ -150,6 +150,7 @@ pub trait McpTool: Send + Sync + 'static {
 #[derive(Clone, Default)]
 pub struct McpToolRegistry {
     tools: Arc<HashMap<String, Arc<dyn McpTool>>>,
+    platform_plugins: Option<Arc<crate::platform_plugins::PlatformPlugins>>,
 }
 
 impl McpToolRegistry {
@@ -180,17 +181,41 @@ impl McpToolRegistry {
         }
         Ok(Self {
             tools: Arc::new(registered),
+            platform_plugins: None,
         })
+    }
+
+    pub(crate) fn with_platform_plugins(
+        mut self,
+        plugins: Arc<crate::platform_plugins::PlatformPlugins>,
+    ) -> Self {
+        self.platform_plugins = Some(plugins);
+        self
+    }
+
+    fn current_tools(&self) -> std::collections::BTreeMap<String, Arc<dyn McpTool>> {
+        let mut tools: std::collections::BTreeMap<_, _> = self
+            .tools
+            .iter()
+            .map(|(name, tool)| (name.clone(), Arc::clone(tool)))
+            .collect();
+        if let Some(plugins) = &self.platform_plugins {
+            for tool in crate::platform_plugins::mcp_tools(&plugins.snapshot()) {
+                tools.entry(tool.name().to_owned()).or_insert(tool);
+            }
+        }
+        tools
+    }
+
+    pub(crate) fn resolve(&self, name: &str) -> Option<Arc<dyn McpTool>> {
+        self.current_tools().remove(name)
     }
 
     async fn available(&self, context: &McpContext) -> Vec<Arc<dyn McpTool>> {
         let deadline = tokio::time::Instant::now() + TOOL_DEADLINE;
-        let mut names: Vec<&String> = self.tools.keys().collect();
-        names.sort_unstable();
-
+        let tools = self.current_tools();
         let mut checks = FuturesUnordered::new();
-        for (index, name) in names.into_iter().enumerate() {
-            let tool = Arc::clone(&self.tools[name]);
+        for (index, (_, tool)) in tools.into_iter().enumerate() {
             checks.push(async move {
                 let available = tool.available(context).await;
                 (index, tool, available)
@@ -226,8 +251,7 @@ impl McpToolRegistry {
     ) -> Result<McpToolOutput, McpToolError> {
         let accepted = tokio::time::Instant::now();
         let tool = self
-            .tools
-            .get(name)
+            .resolve(name)
             .ok_or_else(|| McpToolError::new("tool_not_found", format!("unknown tool: {name}")))?;
         let tool_deadline = tool.deadline();
         let deadline = tokio::time::Instant::now() + tool_deadline;

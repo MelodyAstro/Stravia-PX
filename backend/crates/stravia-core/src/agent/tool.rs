@@ -70,6 +70,18 @@ pub(crate) struct AgentToolRegistry {
 }
 
 impl AgentToolRegistry {
+    pub(crate) fn with_additional(
+        &self,
+        tools: Vec<Arc<dyn AgentTool>>,
+    ) -> Result<Self, AgentToolError> {
+        if tools.is_empty() {
+            return Ok(self.clone());
+        }
+        let mut all: Vec<_> = self.tools.values().cloned().collect();
+        all.extend(tools);
+        Self::new(all)
+    }
+
     pub(crate) fn new(tools: Vec<Arc<dyn AgentTool>>) -> Result<Self, AgentToolError> {
         let mut by_id = HashMap::with_capacity(tools.len());
         for tool in tools {

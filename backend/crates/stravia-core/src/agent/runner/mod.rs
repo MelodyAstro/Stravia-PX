@@ -51,6 +51,7 @@ pub struct AgentRunner {
     capability_model_authorizations:
         Arc<HashMap<(AgentDefinitionId, u32), CapabilityModelAuthorization>>,
     hooks: Option<HookRuntime>,
+    platform_plugins: Option<Arc<crate::platform_plugins::PlatformPlugins>>,
 }
 
 mod r#loop;

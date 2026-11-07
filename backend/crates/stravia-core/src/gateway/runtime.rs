@@ -509,6 +509,8 @@ impl Gateway {
         )
         .await?;
         let catalog_base_url = config.catalog_base_url.clone();
+        let platform_plugins =
+            crate::platform_plugins::PlatformPlugins::open(&config.data_dir).await?;
         let (browser_preferences, browser_path) =
             admin::browser::BrowserPreferences::load(&config.data_dir);
         let custom_currency = storage.money().custom_currency().await?;
@@ -521,6 +523,7 @@ impl Gateway {
             vendor_http_client: vendor_http_client.clone(),
             vendor_websocket_client: vendor_websocket_client.clone(),
             vendor_plugins: vendor_plugins.clone(),
+            platform_plugins,
             vendor_websocket_pool: Arc::new(crate::plugin::network::VendorWebSocketPool::default()),
             provider_catalog: provider_catalog.clone(),
             catalog_sync: crate::plugin::catalog_sync::VendorCatalogSync::new(

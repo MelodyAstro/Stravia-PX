@@ -10,7 +10,26 @@ impl HookRuntime {
         Self {
             hooks: hooks.into(),
             tools,
+            platform_plugins: None,
+            plugin_snapshot: None,
         }
+    }
+
+    pub(crate) fn with_platform_plugins(
+        mut self,
+        plugins: Arc<crate::platform_plugins::PlatformPlugins>,
+    ) -> Self {
+        self.platform_plugins = Some(plugins);
+        self
+    }
+
+    pub(crate) fn with_plugin_snapshot(
+        mut self,
+        snapshot: Vec<crate::platform_plugins::PluginSnapshot>,
+    ) -> Self {
+        self.platform_plugins = None;
+        self.plugin_snapshot = Some(snapshot.into());
+        self
     }
 
     pub fn descriptors(&self) -> Vec<HookDescriptor> {
@@ -23,8 +42,19 @@ impl HookRuntime {
         request: &AiRequest,
         completeness: ContextCompleteness,
     ) -> Result<InferenceRun, HookError> {
-        let sessions = self
-            .hooks
+        let snapshot = self.plugin_snapshot.clone().unwrap_or_else(|| {
+            self.platform_plugins
+                .as_ref()
+                .map(|plugins| plugins.snapshot())
+                .unwrap_or_default()
+                .into()
+        });
+        let mut hooks = self.hooks.to_vec();
+        hooks.extend(crate::platform_plugins::snapshot_hooks(&snapshot));
+        let tools = self
+            .tools
+            .with_additional(crate::platform_plugins::snapshot_tools(&snapshot))?;
+        let sessions = hooks
             .iter()
             .map(|hook| {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -62,7 +92,7 @@ impl HookRuntime {
             sessions,
             route: None,
             round: 0,
-            tools: self.tools.clone(),
+            tools,
             exposed_tools: HashMap::new(),
             exposed_tool_specs: HashMap::new(),
             read_scope: if request

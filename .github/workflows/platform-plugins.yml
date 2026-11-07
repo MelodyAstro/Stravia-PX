@@ -1,0 +1,111 @@
+name: Platform Plugins
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, px/platform-plugins]
+    paths:
+      - '.github/workflows/platform-plugins.yml'
+      - 'Taskfile.yml'
+      - 'backend/crates/stravia-core/Cargo.toml'
+      - 'backend/crates/stravia-core/src/admin/extensions.rs'
+      - 'backend/crates/stravia-platform-plugin-*/**'
+      - 'backend/crates/stravia-core/src/platform_plugins/**'
+      - 'backend/crates/stravia-core/src/hook/**'
+      - 'backend/crates/stravia-core/src/mcp/**'
+      - 'backend/crates/stravia-core/src/agent/**'
+      - 'backend/crates/stravia-core/src/gateway/**'
+      - 'backend/apps/stravia-server/src/admin_routes/platform_plugins*'
+      - 'backend/apps/stravia-server/src/admin_routes/mod.rs'
+      - 'frontend/stravia-webui/src/routes/platform-plugins/**'
+      - 'frontend/stravia-webui/e2e/platform-plugins.spec.ts'
+      - 'frontend/stravia-webui/src/lib/admin-client.ts'
+      - 'frontend/stravia-webui/src/lib/types/**'
+      - 'frontend/stravia-webui/src/lib/components/app-shell.svelte'
+      - 'frontend/stravia-webui/messages/*.json'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-plugins-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: '1.99.1'
+  BUN_VERSION: '1.4.2'
+  STRAVIA_PLATFORM_PLUGIN_FIXTURE: ${{ github.workspace }}/target/wasm32-wasip2/release/stravia_platform_plugin_example.wasm
+
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config libssl-dev
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          target: wasm32-wasip2
+          components: rustfmt
+          cache: false
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: px-native-linux-gnu-v1
+          cache-targets: 'true'
+          cache-all-crates: 'true'
+          cache-on-failure: 'true'
+          cache-bin: 'false'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: go-task/setup-task@v2
+        with:
+          version: '3.52.0'
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Build installable example and test sandbox
+        run: |
+          task build:platform-plugin-example
+          cargo test --locked --release -p stravia-platform-plugin-sdk -p stravia-platform-plugin-runtime --lib
+      - name: Build embedded provider
+        run: task build:vendors
+      - name: Verify lifecycle, hooks, tools and authenticated HTTP API
+        run: |
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib platform_plugins -- --test-threads=1
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-server --no-default-features --lib platform_plugins -- --test-threads=1
+      - name: Check WebUI and build static preview
+        run: |
+          task install:web
+          bun run check:web
+          bun run lint:web
+          bun run build:web
+      - name: Verify plugin management in the browser
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+          PLAYWRIGHT_USE_PREBUILT: '1'
+        run: |
+          bun run playwright:install:web chromium --with-deps
+          bun run --filter stravia-webui test:e2e platform-plugins.spec.ts --retries=0
+      - name: Record independently installable example
+        run: |
+          mkdir -p dist/platform-plugins
+          cp "$STRAVIA_PLATFORM_PLUGIN_FIXTURE" dist/platform-plugins/
+          printf '%s\n' '${{ github.sha }}' > dist/platform-plugins/source-commit.txt
+          cd dist/platform-plugins
+          sha256sum stravia_platform_plugin_example.wasm > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-plugin-example-${{ github.sha }}
+          path: dist/platform-plugins/*
+          if-no-files-found: error
+          retention-days: 14
