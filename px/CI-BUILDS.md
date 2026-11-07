@@ -45,6 +45,18 @@ separate, source-bound Actions artifacts; production data and credentials are
 never cached. Builds queue behind an active run so a new push cannot discard
 an expensive cold build before its cache has been saved.
 
+## Platform plugin verification
+
+The separate **Platform Plugins** workflow verifies the guest SDK and sandbox,
+real component lifecycle and hooks, authenticated management API, and browser
+management page. It publishes the independently installable example component.
+It restores the shared Rust dependency cache without changing it, then uses a
+separate cache keyed by backend sources, Cargo inputs and build icons to retain
+workspace compilation results, including on a later test failure. This avoids
+an existing dependency-cache hit preventing newly compiled workspace files from
+being saved. Tests always run; Cargo still checks freshness after restoring
+outputs, and changed source inputs select a new workspace cache.
+
 For a cache-only maintenance run, use **Run workflow → tools_only = true**.
 It compiles or restores the helper and Wasm components, verifies their digests,
 and saves a cache without rebuilding the unchanged server or emitting a release
