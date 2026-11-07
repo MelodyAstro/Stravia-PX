@@ -1373,6 +1373,9 @@ impl ClientProjectionSession {
     }
 
     fn ends_unindexed_thinking(delta: &AiStreamDelta) -> bool {
+        if stravia_protocol_codec::codec::open_responses::is_custom_tool_stream_delta(delta) {
+            return true;
+        }
         // Transport/response bookkeeping can arrive between public Thinking
         // and its late signature. Only a semantic item/turn boundary closes it.
         // Unknown events are prefix carriers here; typed ItemDone carries any
@@ -1416,7 +1419,10 @@ impl ClientProjectionSession {
                     | AiStreamDelta::Usage(_)
                     | AiStreamDelta::ResponseTerminal { .. }
                     | AiStreamDelta::Unknown { .. }
-            );
+            )
+                && !stravia_protocol_codec::codec::open_responses::is_custom_tool_stream_delta(
+                    &delta,
+                );
             if !self.client_output_started && prefix_only {
                 self.pending_prefix.push(delta);
                 continue;
@@ -2546,6 +2552,35 @@ mod tests {
         ANTHROPIC_MESSAGES_2023_06_01, GOOGLE_GEMINI_GENERATE_CONTENT_V1BETA,
         OPEN_RESPONSES_2026_04_24,
     };
+
+    #[tokio::test]
+    async fn custom_tool_input_is_visible_before_item_completion() {
+        let (mut session, _, _) = projection_session_fixture("custom-tool-projection").await;
+        let header = AiStreamDelta::MessageStart {
+            id: "resp".into(),
+            model: "test".into(),
+        };
+        assert!(
+            session
+                .project_live_deltas(vec![header], false)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let delta = AiStreamDelta::Unknown { raw: serde_json::json!({"__open_responses_event":{
+            "type":"response.custom_tool_call_input.delta","output_index":0,"item_id":"ctc","delta":"*** Begin Patch\n"
+        }}).to_string() };
+        let batches = session
+            .project_live_deltas(vec![delta], false)
+            .await
+            .unwrap();
+        assert!(
+            batches
+                .iter()
+                .flat_map(|batch| batch.deltas())
+                .any(|d| matches!(d, AiStreamDelta::Unknown { .. }))
+        );
+    }
 
     #[tokio::test]
     async fn request_models_project_wire_name_without_changing_canonical_response() {

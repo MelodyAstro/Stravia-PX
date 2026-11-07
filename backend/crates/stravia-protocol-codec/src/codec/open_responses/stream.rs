@@ -1,4 +1,5 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+mod custom_tools;
 
 use super::formatter::{gateway_item_id, response_resource_snapshot};
 use crate::SseEvent;
@@ -87,6 +88,7 @@ pub struct ResponsesStreamFormatter {
     tool_index_map: HashMap<usize, usize>,
     tool_calls: Vec<PendingFunctionCall>,
     standalone_items: Vec<PendingOutputItem>,
+    custom_input_done: HashSet<usize>,
     completed_message_content: HashMap<usize, Vec<serde_json::Value>>,
     completed_item_fields: HashMap<usize, serde_json::Map<String, serde_json::Value>>,
     indexed_reasoning: BTreeMap<usize, PendingIndexedReasoning>,
@@ -133,6 +135,7 @@ impl ResponsesStreamFormatter {
             tool_index_map: HashMap::new(),
             tool_calls: Vec::new(),
             standalone_items: Vec::new(),
+            custom_input_done: HashSet::new(),
             completed_message_content: HashMap::new(),
             completed_item_fields: HashMap::new(),
             indexed_reasoning: BTreeMap::new(),
@@ -1739,6 +1742,10 @@ impl ResponsesStreamFormatter {
                         .as_object_mut()
                         .and_then(|object| object.remove("__open_responses_event"))
                     {
+                        if super::custom_tools::is_stream_event(&event) {
+                            self.format_custom_tool_event(&mut events, event);
+                            continue;
+                        }
                         // Only this recognized metadata event uses the raw rolling channel.
                         // Resumable state must arrive through registered typed ItemDone.
                         if event.get("type").and_then(serde_json::Value::as_str)
@@ -1842,6 +1849,15 @@ impl ResponsesStreamFormatter {
                     }
                 }
                 AiStreamDelta::ItemDone { index, item } => {
+                    if let Some(raw) = item.unknown_ref()
+                        && raw
+                            .get("type")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(super::custom_tools::is_custom_tool_item)
+                    {
+                        self.finish_custom_tool(&mut events, *index, raw);
+                        continue;
+                    }
                     if let Some(parts) = super::formatter::split_assistant_output(item) {
                         self.finish_unindexed_message(&mut events);
                         self.ensure_started(&mut events);

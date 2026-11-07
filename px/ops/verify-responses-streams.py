@@ -6,6 +6,7 @@ p.add_argument("--model",default="private/gpt-6-luna")
 p.add_argument("--access-file",type=pathlib.Path,default=pathlib.Path("/root/stravia-access.json"))
 p.add_argument("--fixture",type=pathlib.Path,help="Optional private Codex request; never committed or printed")
 p.add_argument("--report",type=pathlib.Path,default=pathlib.Path("/root/stravia-responses-verification.json"))
+p.add_argument("--custom-tools",action="store_true",help="Verify free-form custom calls and result replay over HTTP and WS")
 args=p.parse_args()
 if not args.host or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-' for c in args.host):p.error("--host must contain only a hostname")
 access=json.loads(args.access_file.read_text())
@@ -77,6 +78,30 @@ def websocket_request(payload,label,public=False):
    if event.get('type') in ['response.completed','response.failed','error']:break
  finally:sock.close()
  return inspect(events,label,101,started)
+if args.custom_tools:
+ for namespaced in [False,True]:
+  tool={'type':'custom','name':'px_echo','description':'Echo tool. Call this tool once with exactly px-custom-ok as the complete raw input.','format':{'type':'text'}}
+  declaration={'type':'namespace','name':'px_diag','description':'Diagnostic tools','tools':[tool]} if namespaced else tool
+  for transport in ['http','websocket']:
+   body={'model':args.model,'input':[{'role':'user','content':'Call px_echo once with raw input px-custom-ok. After receiving the tool result, reply with exactly OK.'}],'tools':[declaration],'tool_choice':'required','stream':True,'store':False,'reasoning':{'effort':'low'},'include':['reasoning.encrypted_content']}
+   if namespaced:
+    body['tools']=[];body['input'].insert(0,{'type':'additional_tools','role':'developer','tools':[declaration]})
+   label=('namespaced-' if namespaced else '')+'custom-'+transport
+   def invoke(payload,case):
+    if transport=='http':return http_request(payload,case,public=True)
+    frame=copy.deepcopy(payload);frame['type']='response.create';frame.pop('stream',None)
+    return websocket_request(frame,case,public=True)
+   first=invoke(body,label)
+   calls=[i for i in first['output'] if i.get('type')=='custom_tool_call']
+   assert len(calls)==1 and calls[0]['name']=='px_echo' and calls[0]['input']=='px-custom-ok','Custom tool input or identity changed'
+   assert not namespaced or calls[0].get('namespace')=='px_diag','Custom namespace changed'
+   assert first['model']==args.model,'Mapped client model name changed'
+   body['tool_choice']='none';body['input']+=first['output']+[{'type':'custom_tool_call_output','call_id':calls[0]['call_id'],'output':'px-custom-ok'}]
+   final=invoke(body,label+'-result')
+   assert any(i.get('type')=='message' for i in final['output']),'Tool result did not produce a message'
+ output={'passed':True,'model':args.model,'fixture_kind':'synthetic_custom_tools','results':report}
+ args.report.write_text(json.dumps(output,indent=2));print(json.dumps({'passed':True,'cases':len(report)}),flush=True)
+ raise SystemExit(0)
 header={'type':'additional_tools','role':'developer','tools':[{'type':'namespace','name':'px_diag','description':'A diagnostic echo namespace','tools':[{'type':'function','name':'echo','description':'Return the provided value unchanged','parameters':{'type':'object','properties':{'value':{'type':'string'}},'required':['value'],'additionalProperties':False},'strict':True}]}]}
 original=json.loads(args.fixture.read_text()) if args.fixture else {'model':args.model,'input':[header,{'role':'user','content':'Reply with exactly OK without calling tools.'}],'tool_choice':'none','stream':True,'store':False,'reasoning':{'effort':'low'}}
 original['model']=args.model
