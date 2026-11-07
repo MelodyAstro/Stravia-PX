@@ -57,7 +57,9 @@ impl PlatformPluginRuntime {
         config.wasm_component_model_threading(false);
         config.consume_fuel(true);
         Ok(Self {
-            engine: Engine::new(&config).context("create platform plugin engine")?,
+            engine: Engine::new(&config)
+                .map_err(runtime_error)
+                .context("create platform plugin engine")?,
             compilation: Arc::new(Semaphore::new(1)),
         })
     }
@@ -83,12 +85,15 @@ impl PlatformPluginRuntime {
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect();
-            let component =
-                Component::from_binary(&engine, &bytes).context("compile platform component")?;
+            let component = Component::from_binary(&engine, &bytes)
+                .map_err(runtime_error)
+                .context("compile platform component")?;
             validate_imports(&engine, &component)?;
             let mut linker = Linker::new(&engine);
-            wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
-            let prepared = bindings::PlatformPluginPre::new(linker.instantiate_pre(&component)?)
+            wasmtime_wasi::p2::add_to_linker_async(&mut linker).map_err(runtime_error)?;
+            let instance_pre = linker.instantiate_pre(&component).map_err(runtime_error)?;
+            let prepared = bindings::PlatformPluginPre::new(instance_pre)
+                .map_err(runtime_error)
                 .context("resolve platform plugin exports")?;
             Ok((prepared, sha256))
         });
@@ -138,10 +143,12 @@ impl LoadedPlugin {
                 .prepared
                 .instantiate_async(&mut store)
                 .await
+                .map_err(runtime_error)
                 .context("instantiate platform plugin")?;
             let output = instance
                 .call_invoke(&mut store, operation, &input)
                 .await
+                .map_err(runtime_error)
                 .context("platform plugin trapped")?;
             let output = bounded_result(output, MAX_MESSAGE_BYTES)?;
             ensure!(
@@ -163,10 +170,12 @@ async fn read_manifest(
         let instance = prepared
             .instantiate_async(&mut store)
             .await
+            .map_err(runtime_error)
             .context("instantiate platform descriptor")?;
         let output = instance
             .call_describe(&mut store)
             .await
+            .map_err(runtime_error)
             .context("platform descriptor trapped")?;
         let output = bounded_result(output, MAX_MANIFEST_BYTES)?;
         ensure!(
@@ -193,6 +202,12 @@ fn bounded_result(output: Result<String, String>, maximum: usize) -> Result<Stri
             Err(anyhow::Error::msg(error))
         }
     }
+}
+
+// Wasmtime 49 uses its own error container, which deliberately does not
+// implement std::error::Error. Convert it explicitly at the public API boundary.
+fn runtime_error(error: wasmtime::Error) -> anyhow::Error {
+    anyhow::Error::msg(format!("{error:#}"))
 }
 
 fn validate_imports(engine: &Engine, component: &Component) -> Result<()> {
@@ -269,10 +284,12 @@ fn new_store(engine: &Engine) -> Result<Store<StoreState>> {
         },
     );
     store.limiter(|state| &mut state.limits);
-    store.set_fuel(MAX_FUEL)?;
+    store.set_fuel(MAX_FUEL).map_err(runtime_error)?;
     // A CPU-only guest yields so cancellation and the wall-clock timeout can
     // drop it, even if it never makes a host call.
-    store.fuel_async_yield_interval(Some(100_000))?;
+    store
+        .fuel_async_yield_interval(Some(100_000))
+        .map_err(runtime_error)?;
     Ok(store)
 }
 
