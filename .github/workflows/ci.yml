@@ -37,6 +37,9 @@ env:
 
 jobs:
   reuse-ci:
+    # PX native builds have their own automatic lane; keep the full upstream
+    # matrix available for manual dispatch and pull requests in the fork.
+    if: github.event_name != 'push' || github.repository == 'Stravia-AI/StraviaPlatform'
     name: Select complete CI
     runs-on: ubuntu-24.04
     timeout-minutes: 120
