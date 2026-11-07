@@ -2,6 +2,11 @@ name: PX Native Linux
 
 on:
   workflow_dispatch:
+    inputs:
+      tools_only:
+        description: Warm or verify compiled tools without rebuilding the server
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -78,7 +83,7 @@ jobs:
         id: compiled-tools
         uses: actions/cache/restore@v5
         with:
-          key: px-tools-v1-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'backend/crates/stravia-vendor-*/**', 'backend/crates/stravia-runtime-contract/**', 'backend/crates/stravia-protocol-codec/**', 'backend/crates/stravia-core/assets/providers.stravia.json', 'frontend/stravia-webui/src/assets/icons/*.svg', 'px/ops/ci-tools-cache.py') }}
+          key: px-tools-v1-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('.github/workflows/px-native-linux.yml', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'backend/crates/stravia-vendor-*/**', 'backend/crates/stravia-runtime-contract/**', 'backend/crates/stravia-protocol-codec/**', 'backend/crates/stravia-core/assets/providers.stravia.json', 'frontend/stravia-webui/src/assets/icons/*.svg', 'px/ops/ci-tools-cache.py') }}
           path: |
             target/debug/stravia-build-vendors
             target/vendor-plugins
@@ -91,6 +96,7 @@ jobs:
         run: python3 px/ops/ci-tools-cache.py verify
 
       - name: Build WebUI
+        if: inputs.tools_only != true
         run: task build:web
 
       - name: Build embedded provider and its build tool
@@ -120,9 +126,11 @@ jobs:
             target/px-tools-cache.json
 
       - name: Verify protocol regressions
+        if: inputs.tools_only != true
         run: cargo test --locked --release -p stravia-protocol-codec --lib
 
       - name: Verify custom tool delivery and request mappings
+        if: inputs.tools_only != true
         shell: bash
         run: |
           set -euo pipefail
@@ -130,15 +138,22 @@ jobs:
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib request_models -- --test-threads=1
 
       - name: Build optimized native server
+        if: inputs.tools_only != true
         run: cargo build --locked --release -p stravia-server --bin stravia-server
 
       - name: Verify packaged executable
+        if: inputs.tools_only != true
         run: target/release/stravia-server --version
 
       - name: Package source-bound host and components
+        if: inputs.tools_only != true
         run: python3 px/ops/package-ci-native.py
 
+      - name: Verify compiled-tool cache checkpoint
+        run: python3 px/ops/ci-tools-cache.py verify
+
       - name: Upload private native package
+        if: inputs.tools_only != true
         uses: actions/upload-artifact@v4
         with:
           name: stravia-px-linux-x86_64-gnu-${{ github.sha }}
