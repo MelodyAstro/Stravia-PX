@@ -2567,6 +2567,14 @@ mod tests {
             )
             .await
             .unwrap();
+        assert!(
+            batches.is_empty(),
+            "A message header waits for visible output"
+        );
+        let batches = session
+            .project_live_deltas(vec![AiStreamDelta::TextDelta("OK".into())], false)
+            .await
+            .unwrap();
         assert!(batches.iter().flat_map(|batch| batch.deltas()).any(|delta|
             matches!(delta, AiStreamDelta::MessageStart { model, .. } if model == "custom-luna")));
     }
