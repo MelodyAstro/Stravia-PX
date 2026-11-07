@@ -11,7 +11,7 @@ use stravia_core::storage::MemoryStorage;
 use tower::ServiceExt;
 use tracing_subscriber::layer::SubscriberExt;
 
-async fn memory_gateway(data_dir: &Path) -> anyhow::Result<Gateway> {
+pub(super) async fn memory_gateway(data_dir: &Path) -> anyhow::Result<Gateway> {
     Gateway::from_storage(
         GatewayConfig {
             data_dir: data_dir.to_path_buf(),
@@ -39,7 +39,9 @@ async fn status_reports_the_running_server_version() -> anyhow::Result<()> {
 }
 
 /// 内容端点测试夹具：带管理员令牌的路由与同一个 Gateway。
-async fn contents_fixture(directory: &Path) -> anyhow::Result<(Gateway, axum::Router, String)> {
+pub(super) async fn contents_fixture(
+    directory: &Path,
+) -> anyhow::Result<(Gateway, axum::Router, String)> {
     let gateway = Gateway::new(GatewayConfig {
         data_dir: directory.to_path_buf(),
         ..Default::default()

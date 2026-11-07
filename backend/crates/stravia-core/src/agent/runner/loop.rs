@@ -22,12 +22,47 @@ impl AgentRunner {
             output_validators: Arc::new(HashMap::new()),
             capability_model_authorizations: Arc::new(HashMap::new()),
             hooks: None,
+            platform_plugins: None,
         })
     }
 
     pub(crate) fn with_hook_runtime(mut self, hooks: HookRuntime) -> Self {
         self.hooks = Some(hooks);
         self
+    }
+
+    pub(crate) fn with_platform_plugins(
+        mut self,
+        plugins: Arc<crate::platform_plugins::PlatformPlugins>,
+    ) -> Self {
+        self.platform_plugins = Some(plugins);
+        self
+    }
+
+    fn snapshot_platform_plugins(&mut self) -> Result<(), AgentRunError> {
+        if let Some(plugins) = self.platform_plugins.take() {
+            let snapshot = plugins.snapshot();
+            let tools = crate::platform_plugins::snapshot_tools(&snapshot)
+                .into_iter()
+                .map(|tool| {
+                    let id = VersionedToolId {
+                        id: tool.id().as_str().to_owned(),
+                        version: 1,
+                    };
+                    Arc::new(crate::agent::PlatformToolAgentAdapter::with_id(tool, id))
+                        as Arc<dyn AgentTool>
+                })
+                .collect();
+            self.tools = self
+                .tools
+                .with_additional(tools)
+                .map_err(|error| AgentRunError::new(error.code, error.message))?;
+            self.hooks = self
+                .hooks
+                .take()
+                .map(|hooks| hooks.with_plugin_snapshot(snapshot));
+        }
+        Ok(())
     }
     pub fn with_artifact_store(mut self, artifacts: Option<Arc<dyn ArtifactStore>>) -> Self {
         self.artifacts = artifacts;
@@ -92,7 +127,10 @@ impl AgentRunner {
         &self,
         definition: &stravia_runtime_contract::agent::AgentDefinitionSpec,
     ) -> Result<(), AgentRunError> {
-        self.tools
+        let mut snapshot = self.clone();
+        snapshot.snapshot_platform_plugins()?;
+        snapshot
+            .tools
             .model_specs(&definition.tools)
             .map(|_| ())
             .map_err(|error| AgentRunError::new(error.code, error.message))
@@ -131,7 +169,10 @@ impl AgentRunner {
         commit_policy: AgentCommitPolicy,
         resolved: Option<ResolvedAgentExecution>,
     ) -> AgentEventStream {
-        let runner = self.clone();
+        let mut runner = self.clone();
+        if let Err(error) = runner.snapshot_platform_plugins() {
+            return Box::pin(stream::once(async move { AgentEvent::Failed { error } }));
+        }
         let observation = crate::interaction_observation::scope::current();
         let root_request = crate::rpm::current_root_request();
         let (events, receiver) = mpsc::channel(32);

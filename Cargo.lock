@@ -7800,6 +7800,8 @@ dependencies = [
  "stable_deref_trait",
  "stravia-credential-protection",
  "stravia-media",
+ "stravia-platform-plugin-runtime",
+ "stravia-platform-plugin-sdk",
  "stravia-protocol-codec",
  "stravia-runtime-contract",
  "stravia-sql",
@@ -7935,6 +7937,38 @@ dependencies = [
  "tokio",
  "tracing",
  "zip 9.0.5",
+]
+
+[[package]]
+name = "stravia-platform-plugin-example"
+version = "0.6.4"
+dependencies = [
+ "serde_json",
+ "stravia-platform-plugin-sdk",
+]
+
+[[package]]
+name = "stravia-platform-plugin-runtime"
+version = "0.6.4"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sha2 0.11.1",
+ "stravia-platform-plugin-sdk",
+ "tokio",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wat",
+]
+
+[[package]]
+name = "stravia-platform-plugin-sdk"
+version = "0.6.4"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
+ "wit-bindgen 0.63.0",
 ]
 
 [[package]]

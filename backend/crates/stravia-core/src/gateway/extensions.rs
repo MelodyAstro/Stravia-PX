@@ -7,6 +7,8 @@ pub(super) async fn configure_gateway_extensions(
     mut mcp_tools: Vec<Arc<dyn McpTool>>,
     mut agent_definitions: Vec<stravia_runtime_contract::agent::AgentDefinitionSpec>,
 ) -> anyhow::Result<()> {
+    gateway.hook_runtime =
+        HookRuntime::default().with_platform_plugins(Arc::clone(&gateway.platform_plugins));
     agent_definitions.push(stravia_web_search::local_search_definition());
     agent_definitions.push(stravia_media::media_definition());
     agent_definitions.push(stravia_media::audio_definition());
@@ -48,6 +50,7 @@ pub(super) async fn configure_gateway_extensions(
         Arc::clone(&gateway.turn_chains),
     )?
     .with_hook_runtime(gateway.hook_runtime.clone())
+    .with_platform_plugins(Arc::clone(&gateway.platform_plugins))
     .with_tool_authorizer(Arc::new(GatewayAgentToolAuthorizer {
         storage: Arc::clone(&gateway.storage),
     }))
@@ -158,7 +161,8 @@ pub(super) async fn configure_gateway_extensions(
     let (hook_runtime, read_tool) = hook_runtime_with_web_search(gateway, hooks, tools)?;
     gateway.hook_runtime = hook_runtime;
     mcp_tools.push(Arc::new(read_tool));
-    gateway.mcp_registry = McpToolRegistry::new(mcp_tools)?;
+    gateway.mcp_registry = McpToolRegistry::new(mcp_tools)?
+        .with_platform_plugins(Arc::clone(&gateway.platform_plugins));
     Ok(())
 }
 struct GatewayWebSearchAuthorizer {
@@ -317,5 +321,9 @@ fn hook_runtime_with_web_search(
         }
     }
     let tool_registry = PlatformToolRegistry::new(tools).map_err(anyhow::Error::new)?;
-    Ok((HookRuntime::with_tools(hooks, tool_registry), read_tool))
+    Ok((
+        HookRuntime::with_tools(hooks, tool_registry)
+            .with_platform_plugins(Arc::clone(&gateway.platform_plugins)),
+        read_tool,
+    ))
 }

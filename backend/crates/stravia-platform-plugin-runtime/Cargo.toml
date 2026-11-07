@@ -1,0 +1,24 @@
+[package]
+name = "stravia-platform-plugin-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Sandboxed Wasmtime Component runtime for Stravia platform extensions"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+stravia-platform-plugin-sdk = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+
+[dev-dependencies]
+wat = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }

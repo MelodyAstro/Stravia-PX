@@ -1,6 +1,31 @@
 use super::*;
 
 impl AdminService {
+    pub async fn list_platform_plugins(
+        &self,
+    ) -> anyhow::Result<Vec<crate::platform_plugins::PlatformPluginSummary>> {
+        Ok(self.gw.platform_plugins.list())
+    }
+
+    pub async fn install_platform_plugin(
+        &self,
+        component: Vec<u8>,
+    ) -> anyhow::Result<crate::platform_plugins::PlatformPluginSummary> {
+        self.gw.platform_plugins.install(component).await
+    }
+
+    pub async fn update_platform_plugin(
+        &self,
+        id: &str,
+        input: crate::platform_plugins::PlatformPluginUpdate,
+    ) -> anyhow::Result<crate::platform_plugins::PlatformPluginSummary> {
+        self.gw.platform_plugins.update(id, input).await
+    }
+
+    pub async fn uninstall_platform_plugin(&self, id: &str) -> anyhow::Result<()> {
+        self.gw.platform_plugins.uninstall(id).await
+    }
+
     pub async fn list_vendor_plugins(&self) -> anyhow::Result<Vec<crate::plugin::PluginSummary>> {
         self.gw.vendor_plugins.list(&self.gw).await
     }
@@ -70,6 +95,15 @@ impl AdminService {
     /// are exposed as management metadata.
     pub async fn list_loaded_extensions(&self) -> anyhow::Result<Vec<Value>> {
         let mut extensions = Vec::new();
+        for plugin in self.gw.platform_plugins.list() {
+            extensions.push(serde_json::json!({
+                "id": plugin.manifest.id,
+                "capability": "platform_plugin",
+                "version": plugin.manifest.version,
+                "source": "local",
+                "status": if plugin.error.is_some() { "error" } else if plugin.enabled { "enabled" } else { "disabled" },
+            }));
+        }
         for plugin in self.gw.vendor_plugins.list(&self.gw).await? {
             extensions.push(serde_json::json!({
                 "id": plugin.vendor_id,
