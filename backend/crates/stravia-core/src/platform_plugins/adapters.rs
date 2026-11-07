@@ -333,9 +333,14 @@ fn event_input(event: HookEvent<'_>) -> anyhow::Result<(HookKind, &'static str, 
             *private_annotations = json!({});
         }
     }
+    for pointer in ["/request/meta/vendor", "/response/vendor"] {
+        if let Some(vendor_annotations) = input.pointer_mut(pointer) {
+            *vendor_annotations = crate::hook::redact_vendor_value(vendor_annotations);
+        }
+    }
     // Plugin payloads contain canonical business data only. Provider snapshots,
     // connection state, auth headers and the API key principal never cross here.
-    Ok((kind, operation, crate::hook::redact_vendor_value(&input)))
+    Ok((kind, operation, input))
 }
 
 #[derive(Deserialize)]
@@ -439,6 +444,19 @@ mod tests {
             previous_response_id: None,
         };
         let mut request = AiRequest::new("model", Vec::new());
+        let tool_schema = json!({
+            "type":"object",
+            "properties":{"token":{"type":"string"},"api_key":{"type":"string"}},
+            "required":["token","api_key"],
+            "additionalProperties":false
+        });
+        request.tools = Some(vec![stravia_runtime_contract::protocol::ir::ToolSpec {
+            name: "business_tool".into(),
+            description: None,
+            parameters: tool_schema.clone(),
+            strict: Some(true),
+            defer_loading: None,
+        }]);
         request.meta.vendor.ingress.insert(
             "nested".into(),
             json!({"Authorization":"private-auth", "api_key":"private-api", "value":42}),
@@ -475,6 +493,53 @@ mod tests {
             value["request"]["meta"]["vendor"]["ingress"]["nested"]["value"],
             42
         );
+        assert_eq!(value["request"]["tools"][0]["parameters"], tool_schema);
+    }
+
+    #[test]
+    fn tool_result_business_keys_are_preserved_in_hook_payloads() {
+        let context = SessionContext {
+            tools_fixed: false,
+            request_id: "request".into(),
+            run_id: "run".into(),
+            request_kind: RequestKind::Generation,
+            ingress: stravia_runtime_contract::protocol::ids::OPENAI_COMPATIBLE_CHAT_COMPLETIONS_V1,
+            transport: TransportKind::Http,
+            principal: stravia_runtime_contract::Principal::new("test-key"),
+            cancellation: Default::default(),
+            inherited_media_turns: Vec::new(),
+            response_id: None,
+            previous_response_id: None,
+        };
+        let content = json!({"token":"pagination-token", "secret":false, "nested":{"api_key":"business-field"}});
+        let metadata = json!({"secret":"business-metadata"})
+            .as_object()
+            .unwrap()
+            .clone();
+        let result = PlatformToolResult {
+            tool_id: ToolId::new("business-tool"),
+            call_id: "call".into(),
+            content: content.clone(),
+            content_kind: stravia_runtime_contract::protocol::ir::ToolResultContentKind::Json,
+            is_error: false,
+            metadata: metadata.clone(),
+        };
+        let route = RouteContext {
+            model_id: "model".into(),
+            provider_id: "private-provider".into(),
+            target_id: "target".into(),
+            egress: None,
+        };
+        let (_, _, payload) = event_input(HookEvent::ToolResult {
+            session: &context,
+            result: &result,
+            route: &route,
+            round: 0,
+        })
+        .unwrap();
+        assert_eq!(payload["result"]["content"], content);
+        assert_eq!(payload["result"]["metadata"], json!(metadata));
+        assert!(!payload.to_string().contains("private-provider"));
     }
 
     #[test]
