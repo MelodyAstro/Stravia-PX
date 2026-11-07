@@ -34,6 +34,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: '1.99.1'
   BUN_VERSION: '1.4.2'
+  STRAVIA_PLATFORM_PLUGIN_FIXTURE: ${{ github.workspace }}/target/wasm32-wasip2/release/stravia_platform_plugin_example.wasm
 
 jobs:
   build:
@@ -41,11 +42,28 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     steps:
+      - name: Reserve space for workspace cache archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h .
+          # This disposable Linux runner builds Rust/Wasm and WebUI only.
+          # Leave enough space for both target outputs and the cache archive.
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet
+          df -h .
+
       - name: Checkout source
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify complete source patch before compilation
+        if: inputs.tools_only != true
+        run: |
+          python3 px/ops/test-package-ci-native.py
+          python3 px/ops/test-deploy-platform-plugins.py
+          python3 px/ops/package-ci-native.py --verify-source-only
 
       - name: Install native build dependencies
         run: |
@@ -57,17 +75,30 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           target: wasm32-wasip2
+          components: rustfmt
           cache: false
 
-      - name: Cache Rust compilation
+      - name: Restore shared Rust dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: px-native-linux-gnu-v1
           cache-targets: 'true'
           cache-all-crates: 'true'
-          cache-on-failure: 'false'
+          cache-on-failure: 'true'
           cache-bin: 'false'
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: 'false'
+
+      # Reuse the exact backend-source cache verified by Platform Plugins.
+      # Cargo still validates the feature/profile graph before reusing outputs.
+      - name: Cache platform workspace compilation
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: px-platform-workspace-v1-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'backend/**', 'frontend/stravia-webui/src/assets/icons/*.svg') }}
+          cache-targets: 'true'
+          cache-all-crates: 'true'
+          cache-workspace-crates: 'true'
+          cache-on-failure: 'true'
+          cache-bin: 'false'
 
       - name: Set up pinned Bun
         uses: oven-sh/setup-bun@v2
@@ -114,7 +145,7 @@ jobs:
       # Save successful compilation before running tests. A later test failure
       # must not force compilation of the same tools again; tests always rerun.
       - name: Save compiled tools and vendor components
-        if: github.ref == 'refs/heads/main' && steps.compiled-tools.outputs.cache-hit != 'true'
+        if: steps.compiled-tools.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           key: ${{ steps.compiled-tools.outputs.cache-primary-key }}
@@ -125,17 +156,30 @@ jobs:
             target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm
             target/px-tools-cache.json
 
+      - name: Build installable platform plugin example
+        if: inputs.tools_only != true
+        run: task build:platform-plugin-example
+
+      - name: Verify platform plugin SDK and sandbox
+        if: inputs.tools_only != true
+        run: cargo test --locked --release -p stravia-platform-plugin-sdk -p stravia-platform-plugin-runtime --lib
+
       - name: Verify protocol regressions
         if: inputs.tools_only != true
         run: cargo test --locked --release -p stravia-protocol-codec --lib
 
-      - name: Verify custom tool delivery and request mappings
+      - name: Verify Core plugin lifecycle and compatibility regressions
         if: inputs.tools_only != true
         shell: bash
         run: |
           set -euo pipefail
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib custom_tool -- --test-threads=1
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib request_models -- --test-threads=1
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib platform_plugins -- --test-threads=1
+
+      - name: Verify authenticated platform plugin management
+        if: inputs.tools_only != true
+        run: cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-server --no-default-features --lib platform_plugins -- --test-threads=1
 
       - name: Build optimized native server
         if: inputs.tools_only != true
