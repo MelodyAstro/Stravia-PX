@@ -1328,10 +1328,10 @@ fn open_responses_output_item_representable(
         return true;
     }
     if let Some(raw) = item.unknown_ref() {
-        return raw
-            .get("type")
-            .and_then(Value::as_str)
-            .is_some_and(crate::codec::open_responses::is_registered_extension_item);
+        return raw.get("type").and_then(Value::as_str).is_some_and(|kind| {
+            crate::codec::open_responses::is_registered_extension_item(kind)
+                || crate::codec::open_responses::custom_tools::is_custom_tool_item(kind)
+        });
     }
     if item.function_call_ref().is_some() {
         return true;
@@ -1492,6 +1492,18 @@ fn prune_delta(
             if target != Protocol::OpenResponses =>
         {
             Some(Owned(AiStreamDelta::ThinkingDelta(text.clone())))
+        }
+        AiStreamDelta::Unknown { raw }
+            if target == Protocol::OpenResponses
+                && serde_json::from_str::<Value>(raw)
+                    .ok()
+                    .is_some_and(|value| {
+                        value.get("__open_responses_event").is_some_and(
+                            crate::codec::open_responses::custom_tools::is_stream_event,
+                        )
+                    }) =>
+        {
+            Some(Borrowed(delta))
         }
         AiStreamDelta::Unknown { raw }
             if target == Protocol::OpenResponses

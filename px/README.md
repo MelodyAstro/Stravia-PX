@@ -14,8 +14,8 @@
   `0.6.4+masub.cc.1`。Gemini 的投影不变。
 - **Codex Responses**：接受、校验并原位保留 `additional_tools`，完整传递 namespace、
   函数 schema、自定义工具格式和位置。主程序及 Codex 插件必须同时更新；仅更新其中
-  一个会继续拒绝请求或丢失工具定义。组件版本为 `0.6.4+masub.responses.1`。
-  无法表达该工具位置语义的跨协议目标会明确拒绝。
+  一个会继续拒绝请求或丢失工具定义。组件版本为 `0.6.4+masub.responses.2`。
+  同时支持原生 `custom_tool_call`、自由文本输入增量和工具结果回传；无法表达这些语义的跨协议目标会明确拒绝。
 - 包含 v0.6.4 官方的签名思考块顺序修复，更新主程序时同时重建受影响插件。
 - **请求模型映射**：按 Key 配置自定义客户端名称，支持限时识别实际模型名与协议并
   生成候选；目标仍需通过原有权限检查。见 [配置与识别说明](REQUEST-MODELS.md)。
@@ -31,7 +31,7 @@ Private 内部路由使用 `private/`，Team 使用 `team/`。启用 Key 的请�
 
 WebSocket 沿用原分组 Key（`Authorization: Bearer <Key>`）和短模型名，如 `gpt-6-luna`。
 客户端若只提供 HTTP Base URL 配置，仍填写 HTTPS Base；上表 WSS 为完整 Responses 端点。
-两条 WSS 入口均已验证完整响应和工具结果往返。
+两条 WSS 入口均已验证完整响应和工具结果往返。服务端到上游的独立地址及修复说明见 [上游 WebSocket](UPSTREAM-WEBSOCKET.md)。
 
 ## 原生构建
 

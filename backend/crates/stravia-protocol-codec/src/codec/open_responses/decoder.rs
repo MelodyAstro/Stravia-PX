@@ -803,6 +803,10 @@ pub fn decode_input_item(item: &Value) -> Result<Option<AiItem>> {
             }))
         }
 
+        kind if super::custom_tools::is_custom_tool_item(kind) => {
+            super::custom_tools::validate_item(item)?;
+            Ok(Some(AiItem::unknown(item.clone())))
+        }
         "additional_tools" => {
             if item
                 .get("role")

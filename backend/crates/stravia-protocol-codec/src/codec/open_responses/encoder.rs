@@ -79,6 +79,7 @@ impl ResponsesEncoder {
                 let item_type = raw.get("type").and_then(Value::as_str).unwrap_or_default();
                 if !super::is_registered_extension_item(item_type)
                     && item_type != "additional_tools"
+                    && !super::custom_tools::is_custom_tool_item(item_type)
                 {
                     continue;
                 }

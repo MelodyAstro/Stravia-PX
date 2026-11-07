@@ -109,6 +109,9 @@ fn is_first_output(delta: &AiStreamDelta) -> bool {
         | AiStreamDelta::ToolCallDelta { .. }
         | AiStreamDelta::ToolCallComplete { .. }
         | AiStreamDelta::ItemDone { .. } => true,
+        AiStreamDelta::Unknown { .. } => {
+            stravia_protocol_codec::codec::open_responses::is_custom_tool_stream_delta(delta)
+        }
         _ => false,
     }
 }
@@ -339,5 +342,26 @@ mod tests {
                     || matches!(&events[1].0, AiStreamDelta::Done { stop_reason } if stop_reason.starts_with("done"))
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod custom_tool_tests {
+    use super::*;
+    #[test]
+    fn custom_tool_events_commit_before_item_done_but_metadata_does_not() {
+        for kind in [
+            "response.output_item.added",
+            "response.custom_tool_call_input.delta",
+            "response.custom_tool_call_input.done",
+        ] {
+            let delta = AiStreamDelta::Unknown { raw: serde_json::json!({"__open_responses_event":{"type":kind,"item":{"type":"custom_tool_call"}}}).to_string() };
+            assert!(is_first_output(&delta));
+        }
+        let delta = AiStreamDelta::Unknown {
+            raw: serde_json::json!({"__open_responses_event":{"type":"response.metadata"}})
+                .to_string(),
+        };
+        assert!(!is_first_output(&delta));
     }
 }

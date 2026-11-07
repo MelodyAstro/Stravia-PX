@@ -48,6 +48,8 @@ pub(super) const DATED_EVENT_TYPES: &[&str] = &[
 const ROLLING_RESPONSES_EVENT_TYPES: &[&str] = &[
     // 上游会给它分配 sequence_number；必须由解析器消费，否则会在序号上留下空洞。
     "response.metadata",
+    "response.custom_tool_call_input.delta",
+    "response.custom_tool_call_input.done",
     "response.reasoning_text.delta",
     "response.reasoning_text.done",
     "response.image_generation_call.in_progress",
@@ -566,6 +568,11 @@ impl ResponsesResponseParser {
                                 })?;
                         items.push(with_wire_metadata(canonical, item));
                     }
+                    kind if super::custom_tools::is_custom_tool_item(kind) => {
+                        super::custom_tools::validate_item(item)?;
+                        saw_tool_call |= kind == "custom_tool_call";
+                        items.push(with_wire_metadata(AiItem::unknown(item.clone()), item));
+                    }
                     "image_generation_call" => {
                         super::validate_hosted_image_generation_item(item, true)?;
                         items.push(with_wire_metadata(AiItem::unknown(item.clone()), item));
@@ -683,6 +690,7 @@ pub struct ResponsesStreamParser {
     streamed_unknown_item_indexes: HashSet<usize>,
     completed_native_items: HashMap<usize, Value>,
     open_items: HashMap<usize, (String, String)>,
+    custom_inputs: HashMap<usize, (String, bool)>,
     open_content_parts: HashMap<(usize, usize), String>,
     streamed_text: HashMap<(usize, usize), String>,
     streamed_refusal: HashMap<(usize, usize), String>,
@@ -709,6 +717,7 @@ impl ResponsesStreamParser {
             streamed_unknown_item_indexes: HashSet::new(),
             completed_native_items: HashMap::new(),
             open_items: HashMap::new(),
+            custom_inputs: HashMap::new(),
             open_content_parts: HashMap::new(),
             streamed_text: HashMap::new(),
             streamed_refusal: HashMap::new(),
@@ -1108,6 +1117,34 @@ impl ResponsesStreamParser {
                     });
                 }
             }
+            "response.custom_tool_call_input.delta" | "response.custom_tool_call_input.done" => {
+                let (index, kind) = self.open_item_for_event(payload)?;
+                if kind != "custom_tool_call" {
+                    anyhow::bail!("custom input event references no open custom_tool_call");
+                }
+                let done = event.ends_with(".done");
+                let text =
+                    required_stream_text(payload, if done { "input" } else { "delta" }, event)?;
+                let (prior, finished) = self
+                    .custom_inputs
+                    .get_mut(&index)
+                    .expect("open custom tool input");
+                if *finished {
+                    anyhow::bail!("custom tool input event after input.done");
+                }
+                if done {
+                    if !text.starts_with(prior.as_str()) {
+                        anyhow::bail!("completed custom input differs from streamed input");
+                    }
+                    *prior = text.to_owned();
+                    *finished = true;
+                } else {
+                    prior.push_str(text);
+                }
+                deltas.push(AiStreamDelta::Unknown {
+                    raw: serde_json::json!({"__open_responses_event":payload}).to_string(),
+                });
+            }
             "response.function_call_arguments.delta" => {
                 let (index, item_type) = self.open_item_for_event(payload)?;
                 if item_type != "function_call" {
@@ -1155,6 +1192,9 @@ impl ResponsesStreamParser {
                     .get("type")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow::anyhow!("output item type is missing"))?;
+                if super::custom_tools::is_custom_tool_item(item_type) {
+                    super::custom_tools::validate_item(item)?;
+                }
                 if super::is_registered_extension_item(item_type) {
                     super::validate_extension_item(item, event == "response.output_item.done")?;
                 } else if super::is_hosted_image_generation_item(item_type) {
@@ -1174,6 +1214,8 @@ impl ResponsesStreamParser {
                     "message"
                         | "function_call"
                         | "function_call_output"
+                        | "custom_tool_call"
+                        | "custom_tool_call_output"
                         | "reasoning"
                         | "compaction"
                         | "compaction_trigger"
@@ -1226,6 +1268,23 @@ impl ResponsesStreamParser {
                         anyhow::bail!("output item {index} completion does not match its addition");
                     }
                 }
+                if item_type == "custom_tool_call" {
+                    let text = item["input"].as_str().expect("validated custom input");
+                    if event == "response.output_item.added" {
+                        self.custom_inputs.insert(index, (text.to_owned(), false));
+                        deltas.push(AiStreamDelta::Unknown {
+                            raw: serde_json::json!({"__open_responses_event":payload}).to_string(),
+                        });
+                    } else {
+                        let (prior, finished) = self
+                            .custom_inputs
+                            .remove(&index)
+                            .expect("open custom input");
+                        if !text.starts_with(&prior) || finished && text != prior {
+                            anyhow::bail!("custom tool item input differs from streamed input");
+                        }
+                    }
+                }
                 if event == "response.output_item.done" {
                     let resource = super::formatter::response_resource_snapshot(
                         "stream_item",
@@ -1241,7 +1300,10 @@ impl ResponsesStreamParser {
                         anyhow::anyhow!("completed output item has no canonical representation")
                     })?;
                     self.append_missing_completed_semantics(index, &canonical, deltas)?;
-                    if canonical.is_compaction() || canonical.is_compaction_trigger() {
+                    if canonical.is_compaction()
+                        || canonical.is_compaction_trigger()
+                        || super::custom_tools::is_custom_tool_item(item_type)
+                    {
                         self.completed_native_items.insert(index, item.clone());
                     }
                     deltas.push(AiStreamDelta::ItemDone {
@@ -1325,7 +1387,12 @@ impl ResponsesStreamParser {
                 for (index, wire) in output.iter().enumerate() {
                     if matches!(
                         wire.get("type").and_then(Value::as_str),
-                        Some("compaction" | "compaction_trigger")
+                        Some(
+                            "compaction"
+                                | "compaction_trigger"
+                                | "custom_tool_call"
+                                | "custom_tool_call_output"
+                        )
                     ) && !self.completed_native_items.contains_key(&index)
                     {
                         let mut item = super::decoder::decode_input_item(wire)?

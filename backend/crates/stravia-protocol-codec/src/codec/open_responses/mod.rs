@@ -1,4 +1,5 @@
 pub mod adapter;
+pub(crate) mod custom_tools;
 pub mod decoder;
 pub mod encoder;
 pub mod formatter;
@@ -198,3 +199,22 @@ fn is_namespaced_extension(value: &str) -> bool {
 
 #[cfg(test)]
 mod schema_tests;
+
+#[cfg(test)]
+mod custom_tool_tests;
+
+/// Validated native custom-tool events contain client output, unlike metadata.
+pub fn is_custom_tool_stream_delta(
+    delta: &stravia_runtime_contract::protocol::ir::AiStreamDelta,
+) -> bool {
+    let stravia_runtime_contract::protocol::ir::AiStreamDelta::Unknown { raw } = delta else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .is_some_and(|value| {
+            value
+                .get("__open_responses_event")
+                .is_some_and(custom_tools::is_stream_event)
+        })
+}

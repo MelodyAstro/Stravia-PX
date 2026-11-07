@@ -317,15 +317,17 @@ impl Gateway {
         if protocol
             != stravia_runtime_contract::protocol::ids::OPEN_RESPONSES_2026_04_24.to_string()
             && request.items.iter().any(|item| {
-                item.unknown_ref()
-                    .and_then(|raw| raw.get("type"))
-                    .and_then(Value::as_str)
-                    == Some("additional_tools")
+                matches!(
+                    item.unknown_ref()
+                        .and_then(|raw| raw.get("type"))
+                        .and_then(Value::as_str),
+                    Some("additional_tools" | "custom_tool_call" | "custom_tool_call_output")
+                )
             })
         {
             return Err(RuntimeError::from_guest(
                 ErrorKind::Unsupported,
-                "additional_tools requires an Open Responses upstream; positional tool loading cannot be converted to the selected protocol".into(),
+                "Native positional and custom tools require an Open Responses upstream; they cannot be converted to the selected protocol".into(),
                 None,
             ).into());
         }
