@@ -1,5 +1,53 @@
 use super::*;
 
+pub(super) async fn get_request_models(
+    State(gw): State<Gateway>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    match gw.admin().request_models(&id).await {
+        Ok(view) => Json(serde_json::json!({"data":view})).into_response(),
+        Err(error) => err(error),
+    }
+}
+
+pub(super) async fn update_request_models(
+    State(gw): State<Gateway>,
+    Path(id): Path<String>,
+    Json(config): Json<stravia_core::request_models::RequestModelConfig>,
+) -> axum::response::Response {
+    match gw.admin().update_request_models(&id, config).await {
+        Ok(view) => Json(serde_json::json!({"data":view})).into_response(),
+        Err(error) => err(error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RequestModelCaptureInput {
+    enabled: bool,
+}
+
+pub(super) async fn capture_request_models(
+    State(gw): State<Gateway>,
+    Path(id): Path<String>,
+    Json(input): Json<RequestModelCaptureInput>,
+) -> axum::response::Response {
+    match gw.admin().capture_request_models(&id, input.enabled).await {
+        Ok(view) => Json(serde_json::json!({"data":view})).into_response(),
+        Err(error) => err(error),
+    }
+}
+
+pub(super) async fn clear_request_model_capture(
+    State(gw): State<Gateway>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    match gw.admin().clear_request_model_capture(&id).await {
+        Ok(view) => Json(serde_json::json!({"data":view})).into_response(),
+        Err(error) => err(error),
+    }
+}
+
 // ── API Keys ──
 
 pub(super) async fn list_api_keys_handler(State(gw): State<Gateway>) -> impl IntoResponse {

@@ -21,6 +21,13 @@ use crate::proxy::security::{ClientCredential, Security};
 
 pub async fn models_list(State(gw): State<Gateway>, headers: HeaderMap) -> Response {
     let credential = ClientCredential::from_inference_headers(&headers);
+    let principal = match Security::new(gw.storage.auth())
+        .required_principal(&credential)
+        .await
+    {
+        Ok(principal) => principal,
+        Err(error) => return error.render(None),
+    };
     let accessible_route_ids = match Security::new(gw.storage.auth())
         .visible_model_ids(&credential)
         .await
@@ -29,6 +36,10 @@ pub async fn models_list(State(gw): State<Gateway>, headers: HeaderMap) -> Respo
         Err(error) => return error.render(None),
     };
     let unrestricted_model_access = accessible_route_ids.is_empty();
+    let mapping = match crate::request_models::load(&gw, principal.api_key_id()).await {
+        Ok(mapping) => mapping,
+        Err(error) => return crate::error::GatewayError::internal(error).render(None),
+    };
 
     let cache = gw.model_cache.read().await;
     let mut models = cache
@@ -38,12 +49,30 @@ pub async fn models_list(State(gw): State<Gateway>, headers: HeaderMap) -> Respo
             unrestricted_model_access || accessible_route_ids.contains(model.id.as_str())
         })
         .filter(|model| !model.model_id.trim().is_empty())
-        .map(|model| {
-            (
-                model.model_id.trim().to_string(),
-                model.effective_display_name().to_string(),
-                model.supported_thinking_levels.clone(),
-            )
+        .flat_map(|model| {
+            let aliases = mapping
+                .mappings
+                .iter()
+                .filter(|m| mapping.enabled && m.target_model_id == model.id.as_str())
+                .map(|m| m.request_model.clone())
+                .collect::<Vec<_>>();
+            let names = if !aliases.is_empty() {
+                aliases
+            } else if mapping.target(model.model_id.as_str()).is_some() {
+                Vec::new()
+            } else {
+                vec![model.model_id.trim().to_string()]
+            };
+            names
+                .into_iter()
+                .map(|name| {
+                    (
+                        name,
+                        model.effective_display_name().to_string(),
+                        model.supported_thinking_levels.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
     models.sort_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));

@@ -109,12 +109,24 @@ impl ModelTurnExecutor for LiveModelTurnExecutor {
             });
         }
         if let Some(observer) = &observer {
-            let (route_id, model_display_name) = self
-                .gateway
-                .model_cache
-                .read()
+            let mapped = if input.authorization == ModelTurnAuthorization::RouteBinding {
+                crate::request_models::resolve(
+                    &self.gateway,
+                    &input.principal,
+                    &input.request.model,
+                )
                 .await
-                .resolve(&input.request.model)
+                .map_err(|error| model_turn_gateway_error(GatewayError::internal(error)))?
+            } else {
+                self.gateway
+                    .model_cache
+                    .read()
+                    .await
+                    .resolve(&input.request.model)
+                    .cloned()
+            };
+            let (route_id, model_display_name) = mapped
+                .as_ref()
                 .map(|route| {
                     (
                         route.id.to_string(),
@@ -609,13 +621,19 @@ fn execute_inner(
     // 在构造边界装箱，避免把准备、重试和派发状态逐层嵌入外层 select 的栈帧。
     Box::pin(async move {
         let gateway = &executor.gateway;
-        let route = gateway
-            .model_cache
-            .read()
-            .await
-            .resolve(&input.request.model)
-            .cloned()
-            .ok_or_else(|| ModelTurnError::new("model_not_found", "Model is unavailable"))?;
+        let route = if input.authorization == ModelTurnAuthorization::RouteBinding {
+            crate::request_models::resolve(gateway, &input.principal, &input.request.model)
+                .await
+                .map_err(|error| model_turn_gateway_error(GatewayError::internal(error)))?
+        } else {
+            gateway
+                .model_cache
+                .read()
+                .await
+                .resolve(&input.request.model)
+                .cloned()
+        }
+        .ok_or_else(|| ModelTurnError::new("model_not_found", "Model is unavailable"))?;
 
         if input.authorization == ModelTurnAuthorization::CapabilityGrant
             && stravia_media::contains_images(&input.request)

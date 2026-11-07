@@ -189,7 +189,7 @@ const settingValues: Record<string, string> = {
   update_use_proxy: 'false',
 }
 
-export async function prepareApp(page: Page): Promise<void> {
+export async function prepareApp(page: Page, locale: 'en-US' | 'zh-CN' = 'en-US'): Promise<void> {
   let updateStatus: UpdateStatus = {
     current_version: '0.1.5',
     check_status: 'up-to-date',
@@ -199,13 +199,13 @@ export async function prepareApp(page: Page): Promise<void> {
     skipped: false,
     download_supported: false,
   }
-  await page.addInitScript(() => {
-    localStorage.setItem('stravia-locale', 'en-US')
+  await page.addInitScript((locale) => {
+    localStorage.setItem('stravia-locale', locale)
     if (localStorage.getItem('stravia-sidebar-state') === null) {
       localStorage.setItem('stravia-sidebar-state', 'expanded')
     }
     localStorage.setItem('stravia-theme', 'system')
-  })
+  }, locale)
 
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
@@ -379,6 +379,19 @@ export async function prepareApp(page: Page): Promise<void> {
             pause_reason: null,
             last_check: null,
             has_successful_sync: true,
+          },
+        },
+      })
+      return
+    }
+    if (/^\/api-keys\/[^/]+\/request-models(?:\/capture)?$/.test(path)) {
+      await route.fulfill({
+        json: {
+          data: {
+            config: { enabled: false, mappings: [] },
+            eligible_models: [],
+            capture: { active: false, expires_at: null, samples: [], dropped_samples: 0 },
+            suggestions: [],
           },
         },
       })

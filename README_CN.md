@@ -21,6 +21,8 @@
 
 </div>
 
+> **Stravia-PX：** 此改版提供按 API Key 设置的请求模型映射、限时请求识别及 Claude/Codex 兼容补丁。配置与原生升级说明见 [改版维护文档](px/README.md)。
+
 ![请求记录 —— 实时追踪每个客户端请求](docs/assets/request-records.png)
 
 > **项目状态：** Stravia 尚未发布 1.0，仍在积极开发中。稳定版发布前，配置格式和数据库兼容性可能发生变化。

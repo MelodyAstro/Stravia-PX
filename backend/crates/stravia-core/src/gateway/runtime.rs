@@ -536,6 +536,7 @@ impl Gateway {
             allowance_samples,
             vendor_client_cache: Arc::new(tokio::sync::RwLock::new([None, None])),
             model_cache,
+            request_model_capture: crate::request_models::CaptureStore::default(),
             cache_affinity: router::cache_affinity::CacheAffinity::new(runtime_cache.clone()),
             route_policy_state: router::RoutePolicyState::new(runtime_cache),
             custom_currency: Arc::new(parking_lot::RwLock::new(custom_currency.map(Arc::new))),

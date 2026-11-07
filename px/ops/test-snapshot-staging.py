@@ -1,6 +1,6 @@
 """Verify actual snapshots retain active state and omit candidate caches."""
-import ast,datetime,hashlib,json,pathlib,tarfile,tempfile,types
-source=ast.parse(pathlib.Path('/root/stravia-maint-responses.py').read_text())
+import ast,datetime,hashlib,json,pathlib,sys,tarfile,tempfile,types
+source=ast.parse(pathlib.Path(sys.argv[1] if len(sys.argv)>1 else '/root/stravia-maint-responses.py').read_text())
 functions=[n for n in source.body if isinstance(n,ast.FunctionDef) and n.name in ['snapshot_filter','snapshot']]
 with tempfile.TemporaryDirectory(prefix='stravia-snapshot-test-') as temporary:
  sandbox=pathlib.Path(temporary);root=sandbox/'opt/stravia';data=sandbox/'var/lib/stravia';backups=sandbox/'var/backups/stravia'

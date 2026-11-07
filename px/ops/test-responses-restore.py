@@ -1,6 +1,6 @@
 """Exercise actual restore logic against temporary data and compatibility trees."""
-import ast,contextlib,datetime,hashlib,io,json,pathlib,tarfile,tempfile,types
-source=ast.parse(pathlib.Path('/root/stravia-maint-responses.py').read_text())
+import ast,contextlib,datetime,hashlib,io,json,pathlib,sys,tarfile,tempfile,types
+source=ast.parse(pathlib.Path(sys.argv[1] if len(sys.argv)>1 else '/root/stravia-maint-responses.py').read_text())
 function=next(n for n in source.body if isinstance(n,ast.FunctionDef) and n.name=='restore')
 digest=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
 with tempfile.TemporaryDirectory(prefix='stravia-restore-test-') as temporary:

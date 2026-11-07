@@ -17,6 +17,7 @@ import { displayCurrency, formatAmount } from '#lib/money.js'
 import type { ApiKey, Route } from '#lib/types.js'
 import DraftDiscardDialog from '#lib/components/draft-discard-dialog.svelte'
 import PageHeader from '#lib/components/page-header.svelte'
+import RequestModelEditor from '#lib/components/request-model-editor.svelte'
 import SettingRow from '#lib/components/setting-row.svelte'
 import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js'
 import * as Field from '#lib/components/ui/field/index.js'
@@ -244,6 +245,9 @@ async function saveKey(): Promise<void> {
     <Field.Field>
       <Field.Label for="api-key-name">{m.common_name()}</Field.Label>
       <Input id="api-key-name" bind:value={form.name} required />
+      {#if apiKey && presentation === 'sheet'}
+        <Button variant="outline" href={resolve('/api-keys/[id]', { id: apiKey.id }) + '#request-models'}>{m.request_models_title()}</Button>
+      {/if}
     </Field.Field>
     {#if !apiKey}
       <SettingRow
@@ -526,6 +530,7 @@ async function saveKey(): Promise<void> {
 {#if presentation === 'page'}
   <div class="route-page route-page-column min-h-[calc(100svh-5rem)]">
     <PageHeader title={apiKey?.name.trim() || apiKey?.id || m.api_key_editor_edit_api_key()} />
+    {#if apiKey}<RequestModelEditor apiKeyId={apiKey.id} />{/if}
     {@render editorForm(true)}
   </div>
 {:else}

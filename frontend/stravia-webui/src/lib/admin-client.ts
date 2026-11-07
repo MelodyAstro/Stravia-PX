@@ -1,4 +1,5 @@
 import type { StatsFilter, StatsWindow } from '#lib/types/stats.js'
+import type { RequestModelConfig, RequestModelsView } from '#lib/types/api-key.js'
 import { apiBase, authenticatedFetch, decodeAdmin, isTauri } from '#lib/auth.js'
 import type { ConnectClientApplyPlan } from '#lib/connect-client-apply.js'
 import type { ConnectClientApplyRequest } from '#lib/connect.js'
@@ -365,6 +366,14 @@ export const admin = {
       request<TargetRuntimeStatus[]>('GET', `/models/${encodeURIComponent(routeId)}/target-statuses`),
   },
   apiKeys: {
+    requestModels: (id: string) =>
+      request<RequestModelsView>('GET', `/api-keys/${encodeURIComponent(id)}/request-models`),
+    saveRequestModels: (id: string, config: RequestModelConfig) =>
+      request<RequestModelsView>('PUT', `/api-keys/${encodeURIComponent(id)}/request-models`, config),
+    captureRequestModels: (id: string, enabled: boolean) =>
+      request<RequestModelsView>('POST', `/api-keys/${encodeURIComponent(id)}/request-models/capture`, { enabled }),
+    clearRequestModelCapture: (id: string) =>
+      request<RequestModelsView>('DELETE', `/api-keys/${encodeURIComponent(id)}/request-models/capture`),
     list: () => request<ApiKey[]>('GET', '/api-keys'),
     create: (input: CreateApiKey) => request<ApiKey>('POST', '/api-keys', input),
     update: (id: string, input: UpdateApiKey) => request<ApiKey>('PUT', `/api-keys/${id}`, input),

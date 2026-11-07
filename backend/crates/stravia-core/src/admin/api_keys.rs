@@ -118,6 +118,15 @@ impl AdminService {
     pub async fn delete_api_key(&self, id: &str) -> anyhow::Result<()> {
         let _save = crate::rpm::CONFIG_WRITE.lock().await;
         self.api_keys_store()?.delete(id).await?;
+        self.gw.request_model_capture.clear(id);
+        self.gw
+            .storage
+            .settings()
+            .set(
+                &format!("{}{id}", crate::request_models::SETTING_PREFIX),
+                &serde_json::to_string(&crate::request_models::RequestModelConfig::default())?,
+            )
+            .await?;
         self.gw.principal_admission.remove_principal(id);
         crate::storage::bump_config_epoch(self.gw.storage.settings()).await?;
         Ok(())

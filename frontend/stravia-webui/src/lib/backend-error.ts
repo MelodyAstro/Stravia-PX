@@ -133,6 +133,22 @@ export function localizeBackendErrorMessage(error: unknown, locale: Locale = get
 
   const name = extractName(payload.params) || m.backend_error_unnamed({}, options)
   switch (payload.code) {
+    case 'REQUEST_MODELS_LIMIT':
+      return m.request_models_error_limit({}, options)
+    case 'REQUEST_MODELS_NAME':
+      return m.request_models_error_name({}, options)
+    case 'REQUEST_MODELS_TARGET_REQUIRED':
+      return m.request_models_error_target_required({}, options)
+    case 'REQUEST_MODELS_DUPLICATE':
+      return m.request_models_error_duplicate({}, options)
+    case 'REQUEST_MODELS_TARGET_MISSING':
+      return m.request_models_error_target_missing({}, options)
+    case 'REQUEST_MODELS_TARGET_DENIED':
+      return m.request_models_error_target_denied({}, options)
+    case 'REQUEST_MODELS_INTERNAL_KEY':
+      return m.request_models_error_internal_key({}, options)
+    case 'REQUEST_MODELS_SESSION_LIMIT':
+      return m.request_models_error_session_limit({}, options)
     case 'invalid_credentials':
       return m.login_invalid_credentials({}, options)
     case 'unauthorized':
