@@ -9,6 +9,9 @@
 
 ## 当前补丁
 
+- **通用平台插件**：独立 Wasm 组件安装、热更新和配置，支持请求/响应/工具结果钩子、
+  平台工具、MCP 与 Agent 工具；首次升级宿主后，兼容插件更新无需重编主程序。
+  管理和开发方法见 [平台插件](PLATFORM-PLUGINS.md)。
 - **GA / Claude Code**：保留 `claude_code_compat` 开关，只作用于 Antigravity 的
   `claude-*` 模型；保留工具参数 JSON Schema，兼容 system 文本投影。组件版本为
   `0.6.4+masub.cc.1`。Gemini 的投影不变。

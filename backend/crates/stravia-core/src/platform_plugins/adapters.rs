@@ -72,7 +72,7 @@ fn external_name(plugin_id: &str, name: &str) -> String {
         .collect::<String>();
     let readable: String = name
         .chars()
-        .take(28)
+        .take(24)
         .map(|character| {
             if character.is_ascii_alphanumeric() {
                 character.to_ascii_lowercase()
@@ -328,6 +328,11 @@ fn event_input(event: HookEvent<'_>) -> anyhow::Result<(HookKind, &'static str, 
         input["route"] = json!({"model_id":route.model_id, "target_id":route.target_id, "egress":route.egress.as_ref().map(ToString::to_string)});
     }
     input["event"] = Value::String(operation.to_owned());
+    for pointer in ["/request/meta/vendor/egress", "/response/vendor/egress"] {
+        if let Some(private_annotations) = input.pointer_mut(pointer) {
+            *private_annotations = json!({});
+        }
+    }
     // Plugin payloads contain canonical business data only. Provider snapshots,
     // connection state, auth headers and the API key principal never cross here.
     Ok((kind, operation, crate::hook::redact_vendor_value(&input)))
@@ -484,6 +489,136 @@ mod tests {
                 json!({"actions":[{"type":"execute_shell","value":"command"}]})
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn every_hook_payload_excludes_private_egress_annotations() {
+        let context = SessionContext {
+            tools_fixed: false,
+            request_id: "request".into(),
+            run_id: "run".into(),
+            request_kind: RequestKind::Generation,
+            ingress: stravia_runtime_contract::protocol::ids::OPENAI_COMPATIBLE_CHAT_COMPLETIONS_V1,
+            transport: TransportKind::Http,
+            principal: stravia_runtime_contract::Principal::new("test-key"),
+            cancellation: Default::default(),
+            inherited_media_turns: Vec::new(),
+            response_id: None,
+            previous_response_id: None,
+        };
+        let mut request = AiRequest::new("model", Vec::new());
+        request
+            .meta
+            .vendor
+            .egress
+            .insert("opaque".into(), json!("private-request-state"));
+        let snapshot = ContextSnapshot::from_request(&request, ContextCompleteness::Full);
+        let mut response = AiResponse::new("response", "model");
+        response
+            .vendor
+            .egress
+            .insert("opaque".into(), json!("private-response-state"));
+        response
+            .vendor
+            .ingress
+            .insert("business_value".into(), json!(42));
+        let route = RouteContext {
+            model_id: "model".into(),
+            provider_id: "provider".into(),
+            target_id: "target".into(),
+            egress: None,
+        };
+        let classified = ClassifiedToolCalls::default();
+        let events = [
+            HookEvent::Request {
+                session: &context,
+                original: &snapshot,
+                read_scope: ReadExposureScope::NONE,
+                current: &request,
+                context: &snapshot,
+                route: Some(&route),
+                round: 0,
+            },
+            HookEvent::UpstreamResponse {
+                session: &context,
+                request: &request,
+                response: &response,
+                classified: &classified,
+                route: &route,
+                round: 0,
+            },
+            HookEvent::ClientOutput {
+                session: &context,
+                response: &response,
+                route: &route,
+                round: 0,
+            },
+        ];
+        for event in events {
+            let (_, _, payload) = event_input(event).unwrap();
+            let encoded = payload.to_string();
+            assert!(!encoded.contains("private-request-state"));
+            assert!(!encoded.contains("private-response-state"));
+            if payload.get("request").is_some() {
+                assert_eq!(payload["request"]["meta"]["vendor"]["egress"], json!({}));
+            }
+            if payload.get("response").is_some() {
+                assert_eq!(payload["response"]["vendor"]["egress"], json!({}));
+                assert_eq!(
+                    payload["response"]["vendor"]["ingress"]["business_value"],
+                    42
+                );
+            }
+        }
+        assert!(
+            !request.meta.vendor.egress.is_empty(),
+            "sanitizing a view must not mutate the request"
+        );
+        assert!(
+            !response.vendor.egress.is_empty(),
+            "sanitizing a view must not mutate the response"
+        );
+    }
+
+    struct NamedTool(String);
+
+    #[async_trait]
+    impl PlatformTool for NamedTool {
+        fn id(&self) -> ToolId {
+            ToolId::new("maximum-name")
+        }
+        fn external_name(&self) -> &str {
+            &self.0
+        }
+        fn parameters(&self) -> Value {
+            json!({"type":"object"})
+        }
+        async fn execute(
+            &self,
+            arguments: Value,
+            _context: ToolExecutionContext,
+        ) -> Result<Value, PlatformToolError> {
+            Ok(arguments)
+        }
+    }
+
+    #[test]
+    fn maximum_tool_names_keep_the_complete_identity_across_transports() {
+        let raw_name = "x".repeat(64);
+        let name = external_name("example.plugin", &raw_name);
+        assert_eq!(name.len(), 48);
+        let registry =
+            crate::hook::PlatformToolRegistry::new(vec![Arc::new(NamedTool(name.clone()))])
+                .unwrap();
+        let exposed = registry
+            .expose(&ToolId::new("maximum-name"), &Default::default())
+            .unwrap();
+        assert_eq!(exposed.provider_name, format!("stravia__{name}"));
+        assert_ne!(
+            name,
+            external_name("example.plugin", &format!("{}y", "x".repeat(63))),
+            "the hash must include the complete untruncated identity"
         );
     }
 }
