@@ -1,6 +1,6 @@
 # Codex upstream WebSocket and native custom tools
 
-The active `GPT-Private` Provider uses the ChatGPT OAuth channel:
+The active `GPT-Private` and `GPT-Team-5X-SOLT-1` Providers use the ChatGPT OAuth channel:
 
 - HTTP Base: `https://chatgpt.com/backend-api/codex`
 - Provider → Advanced → WebSocket URL (`vendor_options.websocket_url`):
@@ -15,8 +15,9 @@ channel and must not be used with this ChatGPT OAuth Provider.
 Save the advanced field through the Provider editor or management API; it is
 stored with the Provider and survives restarts and backups. Do not rewrite an
 invalid Provider merely to populate this field: changing vendor options clears
-its invalid-credential marker. Configure credential-invalid `GPT-Team` after renewing its
-OAuth authorization; do not redirect its keys to the private account.
+its invalid-credential marker. The renewed Team slot has eight separate `team/` routes and the existing
+`GPT-Team` Key has its own eight bare aliases. `GPT-Private` keeps its original
+routes and aliases. Do not redirect either group to the other account.
 
 ## Custom tool compatibility
 

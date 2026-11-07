@@ -28,3 +28,19 @@ PostgreSQL, and container test jobs on every server patch.
 The native verification/deployment helpers also accept a root-only SSH package
 via `package_path` in their private build specification, with SHA verification.
 This avoids uploading build binaries through public inference endpoints.
+
+## Compiled tool cache
+
+In addition to Cargo dependencies and intermediate files, an exact-source cache
+keeps the compiled `stravia-build-vendors` helper, Base manifest/Wasm and the
+Codex/GA Wasm components. The key includes runner OS/architecture, pinned Rust,
+lock files, Cargo configuration and all relevant component/SDK/codec sources.
+A changed input creates a new cache; no broad fallback key reuses old binaries.
+Restored files are verified against their recorded SHA256 and size before use.
+
+The tool cache is saved immediately after successful compilation, before the
+protocol/Core tests. If a later test fails, the compiled tools remain reusable,
+while all tests still run on the next attempt. Deployable packages remain
+separate, source-bound Actions artifacts; production data and credentials are
+never cached. Builds queue behind an active run so a new push cannot discard
+an expensive cold build before its cache has been saved.

@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/px-native-linux.yml'
       - 'px/ops/package-ci-native.py'
+      - 'px/ops/ci-tools-cache.py'
       - 'backend/**'
       - 'frontend/**'
       - 'Cargo.toml'
@@ -21,7 +22,7 @@ permissions:
 
 concurrency:
   group: px-native-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_BUILD_JOBS: '2'
@@ -73,11 +74,50 @@ jobs:
         with:
           version: '3.52.0'
 
-      - name: Build WebUI and embedded provider
-        run: task build:web build:vendors
+      - name: Restore compiled tools and vendor components
+        id: compiled-tools
+        uses: actions/cache/restore@v5
+        with:
+          key: px-tools-v1-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'backend/crates/stravia-vendor-*/**', 'backend/crates/stravia-runtime-contract/**', 'backend/crates/stravia-protocol-codec/**', 'backend/crates/stravia-core/assets/providers.stravia.json', 'frontend/stravia-webui/src/assets/icons/*.svg', 'px/ops/ci-tools-cache.py') }}
+          path: |
+            target/debug/stravia-build-vendors
+            target/vendor-plugins
+            target/wasm32-wasip2/release/stravia_vendor_codex.wasm
+            target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm
+            target/px-tools-cache.json
+
+      - name: Verify cached binaries
+        if: steps.compiled-tools.outputs.cache-hit == 'true'
+        run: python3 px/ops/ci-tools-cache.py verify
+
+      - name: Build WebUI
+        run: task build:web
+
+      - name: Build embedded provider and its build tool
+        if: steps.compiled-tools.outputs.cache-hit != 'true'
+        run: task build:vendors
 
       - name: Build managed compatibility components
+        if: steps.compiled-tools.outputs.cache-hit != 'true'
         run: cargo build --locked --release --lib --target wasm32-wasip2 -p stravia-vendor-codex -p stravia-vendor-antigravity
+
+      - name: Record compiled binary checksums
+        if: steps.compiled-tools.outputs.cache-hit != 'true'
+        run: python3 px/ops/ci-tools-cache.py record
+
+      # Save successful compilation before running tests. A later test failure
+      # must not force compilation of the same tools again; tests always rerun.
+      - name: Save compiled tools and vendor components
+        if: github.ref == 'refs/heads/main' && steps.compiled-tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          key: ${{ steps.compiled-tools.outputs.cache-primary-key }}
+          path: |
+            target/debug/stravia-build-vendors
+            target/vendor-plugins
+            target/wasm32-wasip2/release/stravia_vendor_codex.wasm
+            target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm
+            target/px-tools-cache.json
 
       - name: Verify protocol regressions
         run: cargo test --locked --release -p stravia-protocol-codec --lib
