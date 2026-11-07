@@ -246,7 +246,8 @@ async function saveKey(): Promise<void> {
       <Field.Label for="api-key-name">{m.common_name()}</Field.Label>
       <Input id="api-key-name" bind:value={form.name} required />
       {#if apiKey && presentation === 'sheet'}
-        <Button variant="outline" href={resolve('/api-keys/[id]', { id: apiKey.id }) + '#request-models'}>{m.request_models_title()}</Button>
+        <Button variant="outline" href={resolve('/api-keys/[id]', { id: apiKey.id }) + '#request-models'}
+          >{m.request_models_title()}</Button>
       {/if}
     </Field.Field>
     {#if !apiKey}
