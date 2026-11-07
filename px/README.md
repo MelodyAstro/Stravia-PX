@@ -35,6 +35,8 @@ WebSocket 沿用原分组 Key（`Authorization: Bearer <Key>`）和短模型名�
 
 ## 原生构建
 
+后续构建使用 [GitHub Actions 原生构建](CI-BUILDS.md)，直接下载带提交和 SHA 校验的私有产物。
+
 遵循上游 `AGENTS.md`、`rust-toolchain.toml` 和 `Taskfile.yml`。构建不需要 Docker：
 
 ```sh

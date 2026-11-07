@@ -1,0 +1,108 @@
+name: PX Native Linux
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/px-native-linux.yml'
+      - 'px/ops/package-ci-native.py'
+      - 'backend/**'
+      - 'frontend/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'bun.lock'
+      - 'package.json'
+      - 'patches/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: px-native-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: '2'
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: '1.99.1'
+  BUN_VERSION: '1.4.2'
+
+jobs:
+  build:
+    name: Test and build native GNU package
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config libssl-dev
+
+      - name: Set up pinned Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          target: wasm32-wasip2
+          cache: false
+
+      - name: Cache Rust compilation
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: px-native-linux-gnu-v1
+          cache-targets: 'true'
+          cache-all-crates: 'true'
+          cache-on-failure: 'false'
+          cache-bin: 'false'
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Set up pinned Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Set up Task
+        uses: go-task/setup-task@v2
+        with:
+          version: '3.52.0'
+
+      - name: Build WebUI and embedded provider
+        run: task build:web build:vendors
+
+      - name: Build managed compatibility components
+        run: cargo build --locked --release --lib --target wasm32-wasip2 -p stravia-vendor-codex -p stravia-vendor-antigravity
+
+      - name: Verify protocol regressions
+        run: cargo test --locked --release -p stravia-protocol-codec --lib
+
+      - name: Verify custom tool delivery and request mappings
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib custom_tool -- --test-threads=1
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib request_models -- --test-threads=1
+
+      - name: Build optimized native server
+        run: cargo build --locked --release -p stravia-server --bin stravia-server
+
+      - name: Verify packaged executable
+        run: target/release/stravia-server --version
+
+      - name: Package source-bound host and components
+        run: python3 px/ops/package-ci-native.py
+
+      - name: Upload private native package
+        uses: actions/upload-artifact@v4
+        with:
+          name: stravia-px-linux-x86_64-gnu-${{ github.sha }}
+          path: dist/px-native/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
