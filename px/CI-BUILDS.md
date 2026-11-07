@@ -44,3 +44,10 @@ while all tests still run on the next attempt. Deployable packages remain
 separate, source-bound Actions artifacts; production data and credentials are
 never cached. Builds queue behind an active run so a new push cannot discard
 an expensive cold build before its cache has been saved.
+
+For a cache-only maintenance run, use **Run workflow → tools_only = true**.
+It compiles or restores the helper and Wasm components, verifies their digests,
+and saves a cache without rebuilding the unchanged server or emitting a release
+package. A normal push or manual run with the option off performs all tests and
+builds the deployable package. This also permits a second cache-only run to
+verify that the exact compiled cache is reused.
