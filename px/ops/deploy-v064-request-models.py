@@ -5,6 +5,9 @@ root=pathlib.Path('/opt/stravia');private=pathlib.Path('/root')
 spec=json.loads((private/'stravia-request-model-host-build.json').read_text())
 assert spec['upstream_tag']=='v0.6.4' and spec['upstream_commit']=='a100ef42031073fbdd779e4809fb83cac3a8b956'
 assert set(spec['features'])=={'positional_additional_tools','per_key_request_model_mapping_v1'}
+assert spec['host_sha256']=='53be51b71ca1b4a5804262bf1b46c49903da3a72f7a3d72658ac0f6800b0ab2e','This one-time deployment requires the final response-name fix'
+native_tests=json.loads((private/'stravia-native-request-model-tests.json').read_text())
+assert native_tests['passed'] and native_tests['native_linux_tests']>=9,'Run the final native mapping regressions before deployment'
 def digest(path):
  h=hashlib.sha256()
  with pathlib.Path(path).open('rb') as stream:
