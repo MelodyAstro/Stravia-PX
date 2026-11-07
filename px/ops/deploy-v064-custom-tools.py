@@ -35,7 +35,7 @@ def fingerprint():
 previous=(root/'current').resolve();old=json.loads((root/'responses-compat/manifest.json').read_text())
 assert digest(previous/'stravia-server')==spec['previous_host_sha256']==old['host_sha256']
 assert set(old['features']).issubset(spec['features'])
-tests=json.loads((private/'stravia-native-custom-tool-tests.json').read_text());assert tests['passed'] and tests['custom_tool_tests']>=2 and tests['mapping_tests']>=9
+tests=json.loads((private/'stravia-native-custom-tool-tests.json').read_text());assert tests['passed'] and tests['custom_tool_tests']>=2 and tests['mapping_tests']>=9 and tests['source_commit']==spec['source_commit']
 before=fingerprint();nginx={str(p):digest(p) for p in [pathlib.Path('/etc/nginx/http.d/stravia.conf'),pathlib.Path('/etc/nginx/stravia-proxy.inc')]}
 ga=json.loads((root/'compat/manifest.json').read_text());assert digest(root/'compat'/ga['component'])==ga['sha256']
 with sqlite3.connect('file:/var/lib/stravia/db/gateway.db?mode=ro',uri=True) as db:
