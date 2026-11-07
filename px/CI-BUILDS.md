@@ -24,3 +24,7 @@ or production data and cannot deploy automatically.
 The original full upstream CI matrix stays available for pull requests and
 manual dispatch. Fork pushes use the native PX lane to avoid duplicate desktop,
 PostgreSQL, and container test jobs on every server patch.
+
+The native verification/deployment helpers also accept a root-only SSH package
+via `package_path` in their private build specification, with SHA verification.
+This avoids uploading build binaries through public inference endpoints.

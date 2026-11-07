@@ -38,10 +38,16 @@ assert set(old['features']).issubset(spec['features'])
 tests=json.loads((private/'stravia-native-custom-tool-tests.json').read_text());assert tests['passed'] and tests['custom_tool_tests']>=2 and tests['mapping_tests']>=9 and tests['source_commit']==spec['source_commit']
 before=fingerprint();nginx={str(p):digest(p) for p in [pathlib.Path('/etc/nginx/http.d/stravia.conf'),pathlib.Path('/etc/nginx/stravia-proxy.inc')]}
 ga=json.loads((root/'compat/manifest.json').read_text());assert digest(root/'compat'/ga['component'])==ga['sha256']
-with sqlite3.connect('file:/var/lib/stravia/db/gateway.db?mode=ro',uri=True) as db:
- row=db.execute('select backend_key,state,storage_backend from artifacts where id=?',(spec['artifact_id'],)).fetchone()
-assert row and row[1:]==('ready','internal')
-store=pathlib.Path('/var/lib/stravia/artifacts');package=(store/row[0]).resolve();assert package.is_relative_to(store) and digest(package)==spec['package_sha256']
+if spec.get('package_path'):
+ package=pathlib.Path(spec['package_path']).resolve()
+ assert package.parent==pathlib.Path('/root')
+ assert package.is_file() and digest(package)==spec['package_sha256']
+else:
+ with sqlite3.connect('file:/var/lib/stravia/db/gateway.db?mode=ro',uri=True) as db:
+  row=db.execute('select backend_key,state,storage_backend from artifacts where id=?',(spec['artifact_id'],)).fetchone()
+ assert row and row[1:]==('ready','internal')
+ store=pathlib.Path('/var/lib/stravia/artifacts');package=(store/row[0]).resolve()
+ assert package.is_relative_to(store) and digest(package)==spec['package_sha256']
 assert shutil.disk_usage(root).free>420*1024*1024
 candidate=root/'releases/v0.6.4/masub-custom-tools-1';candidate.mkdir(mode=0o755,exist_ok=True);candidate.chmod(0o755)
 expected={'stravia-server':spec['host_sha256'],'codex.wasm':spec['codex_sha256'],'base.wasm':spec['base_sha256'],'source.patch':spec['source_patch_sha256']}

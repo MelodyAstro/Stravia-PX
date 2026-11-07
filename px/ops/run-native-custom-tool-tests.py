@@ -7,10 +7,16 @@ def digest(path):
  with path.open('rb') as source:
   while chunk:=source.read(1024*1024):h.update(chunk)
  return h.hexdigest()
-with sqlite3.connect('file:/var/lib/stravia/db/gateway.db?mode=ro',uri=True) as db:
- row=db.execute('select backend_key,state,storage_backend from artifacts where id=?',(spec['artifact_id'],)).fetchone()
-assert row and row[1:]==('ready','internal')
-package=(store/row[0]).resolve();assert package.is_relative_to(store) and digest(package)==spec['package_sha256']
+if spec.get('package_path'):
+ package=pathlib.Path(spec['package_path']).resolve()
+ assert package.parent==pathlib.Path('/root')
+ assert package.is_file() and digest(package)==spec['package_sha256']
+else:
+ with sqlite3.connect('file:/var/lib/stravia/db/gateway.db?mode=ro',uri=True) as db:
+  row=db.execute('select backend_key,state,storage_backend from artifacts where id=?',(spec['artifact_id'],)).fetchone()
+ assert row and row[1:]==('ready','internal')
+ store=pathlib.Path('/var/lib/stravia/artifacts');package=(store/row[0]).resolve()
+ assert package.is_relative_to(store) and digest(package)==spec['package_sha256']
 directory=root/'stravia-custom-tool-tests-run';assert not directory.exists();directory.mkdir(mode=0o700)
 counts={}
 try:
@@ -31,8 +37,9 @@ try:
 finally:
  assert directory.resolve()==root/'stravia-custom-tool-tests-run';shutil.rmtree(directory)
 # Only expire the verified diagnostic artifact uploaded by this task.
-with sqlite3.connect('/var/lib/stravia/db/gateway.db',timeout=30) as db:
- key=db.execute('select id from api_keys where name=?',('GPT-Private',)).fetchone()[0]
- assert db.execute('update artifacts set expires_at=0 where id=? and principal=? and state=? and storage_backend=?',(spec['artifact_id'],'api-key:'+key,'ready','internal')).rowcount==1
+if spec.get('artifact_id'):
+ with sqlite3.connect('/var/lib/stravia/db/gateway.db',timeout=30) as db:
+  key=db.execute('select id from api_keys where name=?',('GPT-Private',)).fetchone()[0]
+  assert db.execute('update artifacts set expires_at=0 where id=? and principal=? and state=? and storage_backend=?',(spec['artifact_id'],'api-key:'+key,'ready','internal')).rowcount==1
 report={'passed':True,'custom_tool_tests':counts['custom_tool'],'mapping_tests':counts['request_models'],'source_commit':spec['source_commit'],'binary_sha256':spec['binary_sha256'],'isolated_temporary_data':True,'production_credentials_not_used_by_tests':True,'temporary_files_removed':True}
 (root/'stravia-native-custom-tool-tests.json').write_text(json.dumps(report,indent=2));print(json.dumps(report),flush=True)
