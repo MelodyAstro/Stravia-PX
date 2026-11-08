@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod media_generation;
+mod platform_plugins;
 mod snapshots;
 mod tool_executions;
 

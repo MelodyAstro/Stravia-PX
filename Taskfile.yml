@@ -46,6 +46,30 @@ tasks:
     cmds:
       - cargo run --locked -p stravia-vendor-base --bin stravia-build-vendors
 
+  build:platform-plugin-example:
+    desc: Build the independently installable platform policy and tool example.
+    sources:
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - backend/crates/stravia-platform-plugin-sdk/**/*.rs
+      - backend/crates/stravia-platform-plugin-sdk/**/*.toml
+      - backend/crates/stravia-platform-plugin-sdk/wit/**/*.wit
+    generates:
+      - target/wasm32-wasip2/release/stravia_platform_plugin_example.wasm
+    cmds:
+      - cargo build --locked --release --target wasm32-wasip2 -p stravia-platform-plugin-example
+
+  test:platform-plugins:
+    desc: Exercise the real platform component, lifecycle, hooks, tools and HTTP administration.
+    deps: [build:vendors, build:platform-plugin-example]
+    env:
+      STRAVIA_PLATFORM_PLUGIN_FIXTURE: '{{.ROOT_DIR}}/target/wasm32-wasip2/release/stravia_platform_plugin_example.wasm'
+    cmds:
+      - cargo test --locked -p stravia-platform-plugin-sdk -p stravia-platform-plugin-runtime --lib
+      - cargo test --locked -p stravia-core --lib platform_plugins
+      - cargo test --locked -p stravia-server --no-default-features --lib platform_plugins
+
   build:vendors:all:
     desc: Build standalone Wasm plugins for release assets and explicit integration tests.
     deps: [build:vendors]
@@ -181,7 +205,7 @@ tasks:
 
   build:test:workspace:
     desc: Incrementally prepare the complete supported Rust test executables.
-    deps: [build:web, build:vendor-fixtures]
+    deps: [build:web, build:vendor-fixtures, build:platform-plugin-example]
     sources: &rust_test_sources
       - Taskfile.yml
       - Cargo.toml
@@ -293,7 +317,7 @@ tasks:
 
   test:
     desc: Run WebUI and supported Rust unit tests without building embedded WebUI assets.
-    deps: [install:web, build:vendor-fixtures]
+    deps: [install:web, build:vendor-fixtures, build:platform-plugin-example]
     cmds:
       - bun tests/common/run-in-tempdir.ts bun run --filter stravia-webui test:unit
       - bun tests/common/run-in-tempdir.ts cargo test --locked --workspace --exclude stravia-desktop --exclude stravia-vendor-capability-contract-fixture --exclude stravia-vendor-lifecycle-contract-fixture --exclude stravia-vendor-management-contract-fixture --exclude stravia-vendor-legacy-contract-fixture

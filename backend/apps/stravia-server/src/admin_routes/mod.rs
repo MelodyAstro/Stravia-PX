@@ -29,6 +29,9 @@ use stravia_core::db::models::*;
 mod connect_clients;
 mod money;
 mod performance;
+mod platform_plugins;
+#[cfg(test)]
+mod platform_plugins_tests;
 mod provider_allowances;
 use connect_clients::preview_connect_client_handler;
 use provider_allowances::{
@@ -64,6 +67,7 @@ fn create_router_inner(gateway: Gateway, auth: Option<AdminHttpState>) -> Router
     let mut api = Router::new()
         .route("/system/extensions", get(list_loaded_extensions))
         .merge(vendor_plugins::routes())
+        .merge(platform_plugins::routes())
         .route(
             "/connect-clients/preview",
             post(preview_connect_client_handler),

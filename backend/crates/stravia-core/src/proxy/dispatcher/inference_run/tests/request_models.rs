@@ -200,7 +200,8 @@ async fn request_models_do_not_expand_permissions_and_capture_unknown_authentica
     .await
     .unwrap();
     let (url, calls) = serve_sse_sequence(vec![openai_sse("authorized")]).await;
-    let private = configure_route_with_id(&gateway, "private/gpt-6-luna", &[url.clone()]).await;
+    let private =
+        configure_route_with_id(&gateway, "private/gpt-6-luna", std::slice::from_ref(&url)).await;
     let team = configure_route_with_id(&gateway, "team/gpt-6-luna", &[url]).await;
     let key = bound_key(&gateway, "Private", &private).await;
     assert!(

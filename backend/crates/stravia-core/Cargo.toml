@@ -17,6 +17,9 @@ stravia-runtime-contract = { workspace = true }
 stravia-protocol-codec = { workspace = true }
 stravia-vendor-sdk = { workspace = true }
 stravia-vendor-runtime = { workspace = true }
+stravia-platform-plugin-sdk = { workspace = true }
+stravia-platform-plugin-runtime = { workspace = true }
+jsonschema = { workspace = true }
 stravia-media = { workspace = true }
 stravia-web-search = { workspace = true }
 stravia-credential-protection = { workspace = true }
@@ -103,7 +106,6 @@ reqwest-websocket = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite-deserialize"] }
 office_oxide = { workspace = true }
 stravia-media = { workspace = true, features = ["test-support"] }
-jsonschema = { workspace = true }
 
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 axum = { workspace = true, features = ["http1"] }

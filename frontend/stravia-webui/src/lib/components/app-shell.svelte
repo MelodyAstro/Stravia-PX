@@ -155,6 +155,7 @@ const navigationGroups = [
     label: m.app_shell_nav_system,
     items: [
       { href: '/vendor-plugins', label: m.app_shell_nav_vendor_plugins, icon: PackageOpenIcon },
+      { href: '/platform-plugins', label: m.platform_plugins_title, icon: PackageOpenIcon },
 
       { href: '/settings', label: m.app_shell_nav_settings, icon: CogIcon },
     ],
