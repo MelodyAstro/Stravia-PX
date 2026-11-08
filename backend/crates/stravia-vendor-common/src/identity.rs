@@ -160,12 +160,12 @@ pub fn validate(options: &BTreeMap<String, Value>) -> Result<(), PluginError> {
             "Official client version synchronization must be a boolean",
         ));
     }
-    if let Some(value) = text(options, "client_version") {
-        if value.len() > 32 || stable_version(value).is_none() {
-            return Err(invalid(
-                "Client version must be a stable major.minor.patch version",
-            ));
-        }
+    if let Some(value) = text(options, "client_version")
+        && (value.len() > 32 || stable_version(value).is_none())
+    {
+        return Err(invalid(
+            "Client version must be a stable major.minor.patch version",
+        ));
     }
     for key in [
         "user_agent",
@@ -267,12 +267,10 @@ pub fn prepare(
         if let Some(current) = root
             .get(STATE_KEY)
             .filter(|s| s["repo"].as_str() == Some(repo))
-        {
-            if current["version"].as_str().and_then(stable_version)
+            && current["version"].as_str().and_then(stable_version)
                 > state["version"].as_str().and_then(stable_version)
-            {
-                state["version"] = current["version"].clone();
-            }
+        {
+            state["version"] = current["version"].clone();
         }
         root.insert(STATE_KEY.into(), state.clone());
         host.write_private_state(

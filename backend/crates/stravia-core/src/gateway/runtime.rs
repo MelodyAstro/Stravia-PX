@@ -1263,7 +1263,7 @@ mod tests {
         let result = async {
             for http1 in [false, true] {
                 let direct = gateway
-                    .client_for_vendor(&EffectiveVendorProxy::Direct, http1)
+                    .client_for_vendor(&EffectiveVendorProxy::Direct, &Default::default(), http1)
                     .await?;
                 assert_eq!(
                     direct.get(&origin).send().await?.text().await?,
@@ -1276,6 +1276,7 @@ mod tests {
                             bypass: String::new(),
                             force_http1: http1,
                         },
+                        &Default::default(),
                         http1,
                     )
                     .await?;
@@ -1285,11 +1286,11 @@ mod tests {
                 );
                 let bypassed = gateway.client_for_vendor(&EffectiveVendorProxy::Explicit {
                     proxy_url: explicit.clone(), bypass: " NONMATCH.INVALID 127.0.0.1\tOTHER.INVALID; ".into(), force_http1: http1,
-                }, http1).await?;
+                }, &Default::default(), http1).await?;
                 assert_eq!(bypassed.get(&origin).send().await?.text().await?, "direct origin");
                 let switched = gateway.client_for_vendor(&EffectiveVendorProxy::Explicit {
                     proxy_url: explicit.clone(), bypass: String::new(), force_http1: http1,
-                }, http1).await?;
+                }, &Default::default(), http1).await?;
                 assert_eq!(switched.get(&origin).send().await?.text().await?, "explicit proxy");
             }
             let admin = gateway.admin();
@@ -1359,7 +1360,9 @@ mod tests {
                     } else {
                         EffectiveVendorProxy::Direct
                     };
-                    let client = gateway.client_for_vendor(&proxy, http1).await?;
+                    let client = gateway
+                        .client_for_vendor(&proxy, &Default::default(), http1)
+                        .await?;
                     let request_url = if proxied {
                         "http://127.0.0.1:9/stream"
                     } else {
