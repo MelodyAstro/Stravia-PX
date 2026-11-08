@@ -3,13 +3,13 @@
 自用的 Stravia 补丁与原生部署维护记录。基线为官方 **v0.6.4**
 （`a100ef42031073fbdd779e4809fb83cac3a8b956`），保留官方源码历史及 AGPL-3.0 许可证。
 
-改版发布在私库 `main`，`px/v0.6.4` 保留同一维护线，`upstream` 指向官方。
+改版发布在本仓库 `main`，`px/v0.6.4` 保留同一维护线，`upstream` 指向官方。
 最新状态见 [自定义工具修复与 Team 部署记录](DEPLOYMENT-custom-tools.md)，备份与清理见
 [恢复说明](RECOVERY.md)。
 
 Claude、Codex 和 GA 的服务端身份、自定义 UA 与 TLS，以及官方客户端版本同步见
 [上游请求身份配置](OUTBOUND-IDENTITY.md)。
-该能力位于 `px/outbound-identity` 候选分支，尚未部署；正式 Rust 编译和回归待 CI 验证。
+该能力位于 `px/outbound-identity` 候选分支，尚未部署；构建和回归状态见对应 CI 运行。
 
 ## 当前补丁
 
@@ -42,7 +42,7 @@ WebSocket 沿用原分组 Key（`Authorization: Bearer <Key>`）和短模型名�
 
 ## 原生构建
 
-后续构建使用 [GitHub Actions 原生构建](CI-BUILDS.md)，直接下载带提交和 SHA 校验的私有产物。
+后续构建使用 [GitHub Actions 原生构建](CI-BUILDS.md)，直接下载带提交和 SHA 校验的产物。
 
 遵循上游 `AGENTS.md`、`rust-toolchain.toml` 和 `Taskfile.yml`。构建不需要 Docker：
 
