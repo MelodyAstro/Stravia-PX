@@ -408,6 +408,64 @@ async fn run(
 
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires a freshly built Claude Code component"]
+async fn official_identity_sync_connection_check_is_read_only() {
+    let (runtime, plugin) = load_plugin().await;
+    for (seed, expected_version) in [
+        (None, "2.1.317"),
+        (
+            Some(json!({
+                "oauth_marker":"preserved",
+                "client_identity_version_v1":{
+                    "repo":"anthropics/claude-code", "version":"9.2.0", "checked_at_ms":0
+                }
+            })),
+            "9.2.0",
+        ),
+    ] {
+        let services = Arc::new(MockServices {
+            routes: vec![(
+                "https://api.anthropic.com/api/oauth/usage",
+                200,
+                "application/json",
+                json!({"limits":[]}).to_string(),
+            )],
+            ..Default::default()
+        });
+        let before = seed.map(|state| state.to_string().into_bytes());
+        *services.private_state.lock() = before.clone();
+        let mut provider = signed_in();
+        provider
+            .options
+            .insert("auto_sync_client_version".into(), json!(true));
+        let output = run(
+            &runtime,
+            &plugin,
+            &services,
+            OperationInput::ConnectionCheck {
+                provider,
+                request: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(output, OperationOutput::ConnectionCheck(_)));
+        assert_eq!(*services.private_state.lock(), before);
+        let requests = services.requests.lock();
+        assert_eq!(
+            requests.len(),
+            1,
+            "connection checks must not query release APIs"
+        );
+        assert_eq!(requests[0].url, "https://api.anthropic.com/api/oauth/usage");
+        assert_eq!(
+            wire_header(&requests[0], "user-agent"),
+            format!("claude-cli/{expected_version} (external, cli)")
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires a freshly built Claude Code component"]
 async fn official_identity_sync_preserves_state_pins_and_last_good_version() {
     let (runtime, plugin) = load_plugin().await;
     let services = Arc::new(MockServices::default());

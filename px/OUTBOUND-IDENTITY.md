@@ -17,10 +17,11 @@ Authentication, provider account identity, session/turn IDs and dynamically deri
 Anthropic betas remain owned by the existing provider implementation.
 
 `auto_sync_client_version` is opt-in and defaults to false. With it enabled and no
-manual `client_version`, allowance checks, model discovery and connection checks refresh
+manual `client_version`, allowance checks and model discovery refresh
 the latest official stable release, at most once an hour per connection. Model calls
-only read the cached result: they never query GitHub. Run a model/connection check after
-enabling to populate the cache immediately. A manual version pin takes precedence.
+only read the cached result: they never query GitHub. Connection checks also read the
+cache without querying releases or changing state. Refresh allowance or discover models
+after enabling to populate the cache immediately. A manual version pin takes precedence.
 
 Sources are the official GitHub release APIs for `openai/codex` (`rust-v` tags) and
 `anthropics/claude-code` (`v` tags). Drafts, prereleases and malformed versions are
@@ -80,7 +81,7 @@ emulation are not supported by this backend.
 
 ## Build and upgrade
 
-Use the private `PX Native Linux` workflow. It runs identity/version selection,
+Use the `PX Native Linux` workflow. It runs identity/version selection,
 provider HTTP/WSS identity, and actual ClientHello tests, then builds the server and
 Base/Codex/Antigravity/Claude Code components. Packages carry
 `outbound_identity_tls_v1`. Keep this feature when preparing managed upgrades.

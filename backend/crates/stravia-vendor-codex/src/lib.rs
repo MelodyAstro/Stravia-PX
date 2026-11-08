@@ -191,13 +191,14 @@ pub fn check_connection(
     mut provider: ProviderSnapshot,
 ) -> Result<stravia_vendor_sdk::ConnectionCheckResponse, PluginError> {
     require_route(channel, &provider)?;
+    // The runtime keeps connection checks read-only; consume the cached identity.
     identity::prepare(
         host,
         &mut provider,
         "openai/codex",
         "rust-v",
         CLIENT_VERSION,
-        true,
+        false,
     )?;
     allowance::connection_check(host, &provider)
 }

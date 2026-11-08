@@ -8,7 +8,7 @@ No local compilation or production credentials are required.
 The workflow builds the embedded Base component and managed Codex, GA and Claude Code
 components, runs identity, actual TLS ClientHello, protocol and targeted Core regressions,
 builds the optimized server, and
-uploads a private artifact named `stravia-px-linux-x86_64-gnu-<full commit>`.
+uploads an artifact named `stravia-px-linux-x86_64-gnu-<full commit>`.
 Artifacts are kept for 14 days. Rust build caches are reused on later runs.
 
 Download the successful run's artifact, verify `SHA256SUMS`, and check the exact
