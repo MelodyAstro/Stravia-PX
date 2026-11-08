@@ -72,6 +72,12 @@ impl TransportProfile {
         };
         let cipher_suites = list("tls_cipher_suites", CIPHER_SUITES)?;
         let key_exchange_groups = list("tls_key_exchange_groups", KEY_EXCHANGE_GROUPS)?;
+        if min_version.as_deref().unwrap_or("1.2") == "1.2"
+            && !key_exchange_groups.is_empty()
+            && key_exchange_groups.iter().all(|g| g == "X25519MLKEM768")
+        {
+            return Err("TLS 1.2 requires a non-hybrid key exchange group".into());
+        }
         if !cipher_suites.is_empty() {
             for version in ["1.2", "1.3"] {
                 if version >= min_version.as_deref().unwrap_or("1.2")
@@ -231,6 +237,7 @@ mod tests {
             json!({"tls_min_version":"1.0"}),
             json!({"tls_cipher_suites":"TLS13_AES_128_GCM_SHA256"}),
             json!({"tls_key_exchange_groups":"X25519,X25519"}),
+            json!({"tls_key_exchange_groups":"X25519MLKEM768"}),
             json!({"http_version":"h3"}),
         ] {
             assert!(TransportProfile::from_options(&options(input)).is_err());

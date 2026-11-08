@@ -88,3 +88,10 @@ Provider options and the namespaced private state are included in existing backu
 
 Source-level configuration changes require the new host plus corresponding components.
 Existing deployments do not gain these fields until that package is installed.
+
+The deployment helper accepts both older packages and the new Claude Code component.
+It preserves the installed Vendor inventory: a packaged Claude component is not installed
+automatically. If `claude-code` is already installed, pin its candidate version in the
+private specification's `vendor_versions` to upgrade it together with the host. A missing
+pin or component fails before staging or cutover. Existing providers, credentials and
+options retain their values; configure the new fields after the matching components load.

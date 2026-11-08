@@ -28,9 +28,10 @@ STATIC = Path('/var/www/stravia/_app/immutable')
 MAINT = Path('/usr/local/sbin/stravia-maint')
 REQUIRED_FILES = {'stravia-server', 'base.wasm', 'codex.wasm',
                   'antigravity.wasm', 'source.patch', 'build-manifest.json'}
-OPTIONAL_FILES = {'policy-tools.wasm'}
+OPTIONAL_FILES = {'policy-tools.wasm', 'claudecode.wasm'}
 VENDORS = {'base': 'base.wasm', 'openai-codex': 'codex.wasm',
            'antigravity': 'antigravity.wasm'}
+OPTIONAL_VENDORS = {'claude-code': 'claudecode.wasm'}
 MAX_MEMBER = 300 * 1024 * 1024
 MAX_TOTAL = 800 * 1024 * 1024
 FEATURE = 'platform_plugins_v1'
@@ -65,9 +66,24 @@ def validate_spec(spec):
     require(Path(spec.get('package_path', '')).is_absolute(),
             'package_path must be absolute')
     versions = spec.get('vendor_versions', {})
-    require(set(versions) == set(VENDORS) and all(
+    require(set(VENDORS) <= set(versions) <= set(VENDORS | OPTIONAL_VENDORS) and all(
         isinstance(version, str) and version for version in versions.values()),
-        'vendor_versions must pin base, openai-codex and antigravity')
+        'vendor_versions must pin base, openai-codex and antigravity; claude-code is optional')
+
+
+def deployment_vendors(spec, inspected, installed):
+    """Upgrade optional components only when already installed and explicitly pinned."""
+    vendors = dict(VENDORS)
+    for vendor, filename in OPTIONAL_VENDORS.items():
+        pinned = vendor in spec['vendor_versions']
+        available = filename in inspected['files']
+        if pinned:
+            require(available, 'Pinned Vendor component is absent from the package: ' + vendor)
+            require(vendor in installed, 'Optional Vendor must already be installed: ' + vendor)
+            vendors[vendor] = filename
+        elif available and vendor in installed:
+            require(False, 'Pin the installed optional Vendor version before upgrading: ' + vendor)
+    return vendors
 
 
 def member_name(member):
@@ -137,6 +153,8 @@ def inspect_package(package, expected_sha256, expected_manifest_sha256,
             'Package has no pinned stable upstream tag')
     require(set(required_features) <= set(manifest.get('features', [])),
             'Package drops required managed features')
+    if 'outbound_identity_tls_v1' in manifest.get('features', []):
+        require('claudecode.wasm' in roots, 'Identity package lacks the Claude Code component')
     require(set(manifest.get('files', {})) == roots - {'build-manifest.json'},
             'Build manifest must describe every packaged root file')
     for name, expected in manifest['files'].items():
@@ -466,6 +484,7 @@ def deploy(spec, inspected):
     require(all(plugin['status'] == 'ready' for plugin in plugins), 'An existing Vendor is unavailable')
     before_versions = {plugin['vendor_id']: plugin['version'] for plugin in plugins}
     require(set(VENDORS) <= set(before_versions), 'Required managed Vendors are not installed')
+    managed_vendors = deployment_vendors(spec, inspected, before_versions)
     before_digests = vendor_digests()
     require(before_digests['openai-codex'] == responses['sha256'] and
             before_digests['antigravity'] == ga['sha256'], 'Installed Vendor and maintenance digests differ')
@@ -499,8 +518,9 @@ def deploy(spec, inspected):
             run('rc-service', 'stravia', 'start')
             ready()
             api = client()
-            for vendor in ['openai-codex', 'antigravity']:
-                name = VENDORS[vendor]
+            for vendor, name in managed_vendors.items():
+                if vendor == 'base':  # The host loads its matching embedded Base component.
+                    continue
                 if before_digests[vendor] == files[name]['sha256']:
                     continue
                 preview = api.call('POST', '/api/v1/vendor-plugins/import',
@@ -519,7 +539,7 @@ def deploy(spec, inspected):
                         'Vendor version differs from its pinned version: ' + vendor)
             after_digests = vendor_digests()
             for vendor, old_digest in before_digests.items():
-                expected = files[VENDORS[vendor]]['sha256'] if vendor in VENDORS else old_digest
+                expected = files[managed_vendors[vendor]]['sha256'] if vendor in managed_vendors else old_digest
                 require(after_digests.get(vendor) == expected, 'Installed Vendor digest mismatch: ' + vendor)
             require(api.call('GET', '/api/v1/platform-plugins')['data'] is not None,
                     'Platform plugin administration is unavailable')
@@ -557,6 +577,7 @@ def main():
     inspected = inspect_package(Path(spec['package_path']), spec['package_sha256'],
                                 spec['build_manifest_sha256'], spec['source_commit'],
                                 set(spec.get('required_features', [])) | {FEATURE})
+    managed_vendors = deployment_vendors(spec, inspected, vendor_digests())
     previous, _, _ = current_release(spec, inspected['manifest'])
     candidate = ROOT / 'releases' / inspected['manifest']['upstream_tag'] / spec['release_name']
     require(not candidate.exists() and not candidate.is_symlink(), 'Candidate release already exists')
@@ -566,6 +587,7 @@ def main():
         print(json.dumps({'preflight_passed': True, 'read_only': True, 'source_commit': spec['source_commit'],
                           'previous_release': str(previous), 'candidate': str(candidate),
                           'disk_plan': space, 'disk_free_bytes': shutil.disk_usage(ROOT).free,
+                          'managed_vendors': list(managed_vendors),
                           'immutable_asset_count': len(inspected['assets'])}))
         return
     os.umask(0o077)

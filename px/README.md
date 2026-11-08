@@ -9,6 +9,7 @@
 
 Claude、Codex 和 GA 的服务端身份、自定义 UA 与 TLS，以及官方客户端版本同步见
 [上游请求身份配置](OUTBOUND-IDENTITY.md)。
+该能力位于 `px/outbound-identity` 候选分支，尚未部署；正式 Rust 编译和回归待 CI 验证。
 
 ## 当前补丁
 
@@ -17,10 +18,10 @@ Claude、Codex 和 GA 的服务端身份、自定义 UA 与 TLS，以及官方�
   管理和开发方法见 [平台插件](PLATFORM-PLUGINS.md)。
 - **GA / Claude Code**：保留 `claude_code_compat` 开关，只作用于 Antigravity 的
   `claude-*` 模型；保留工具参数 JSON Schema，兼容 system 文本投影。组件版本为
-  `0.6.4+masub.cc.1`。Gemini 的投影不变。
+  `0.6.4+masub.cc.2`（本分支源码）。Gemini 的投影不变。
 - **Codex Responses**：接受、校验并原位保留 `additional_tools`，完整传递 namespace、
   函数 schema、自定义工具格式和位置。主程序及 Codex 插件必须同时更新；仅更新其中
-  一个会继续拒绝请求或丢失工具定义。组件版本为 `0.6.4+masub.responses.2`。
+  一个会继续拒绝请求或丢失工具定义。组件版本为 `0.6.4+masub.responses.3`（本分支源码）。
   同时支持原生 `custom_tool_call`、自由文本输入增量和工具结果回传；无法表达这些语义的跨协议目标会明确拒绝。
 - 包含 v0.6.4 官方的签名思考块顺序修复，更新主程序时同时重建受影响插件。
 - **请求模型映射**：按 Key 配置自定义客户端名称，支持限时识别实际模型名与协议并
@@ -55,9 +56,9 @@ cargo test --locked -p stravia-protocol-codec --lib
 # 上游标准流程生成 WebUI、内嵌 Base 组件和原生主程序。
 task build:server
 
-# 两个受管理的独立补丁组件必须一起重建。
+# 身份配置使用匹配的主程序及三个独立组件。
 cargo build --locked --release --lib --target wasm32-wasip2 \
-  -p stravia-vendor-antigravity -p stravia-vendor-codex
+  -p stravia-vendor-antigravity -p stravia-vendor-codex -p stravia-vendor-claudecode
 ```
 
 内存有限的构建机器应设置 `CARGO_BUILD_JOBS=1`。Linux GNU 产物的 glibc 要求须与

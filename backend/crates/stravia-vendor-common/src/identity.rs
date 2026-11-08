@@ -146,6 +146,20 @@ fn stable_version(raw: &str) -> Option<[u64; 3]> {
 }
 
 pub fn validate(options: &BTreeMap<String, Value>) -> Result<(), PluginError> {
+    if options
+        .get("client_version")
+        .is_some_and(|v| !v.is_string())
+    {
+        return Err(invalid("Client version must be a string"));
+    }
+    if options
+        .get("auto_sync_client_version")
+        .is_some_and(|v| !v.is_boolean())
+    {
+        return Err(invalid(
+            "Official client version synchronization must be a boolean",
+        ));
+    }
     if let Some(value) = text(options, "client_version") {
         if value.len() > 32 || stable_version(value).is_none() {
             return Err(invalid(
@@ -399,6 +413,12 @@ mod tests {
             ("client_version", "1.2.3-beta"),
         ] {
             assert!(validate(&BTreeMap::from([(key.into(), json!(value))])).is_err());
+        }
+        for (key, value) in [
+            ("client_version", json!(123)),
+            ("auto_sync_client_version", json!("true")),
+        ] {
+            assert!(validate(&BTreeMap::from([(key.into(), value)])).is_err());
         }
     }
 }
