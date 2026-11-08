@@ -466,14 +466,21 @@ pub(super) fn append_identity_headers(
     headers: &mut Vec<(String, String)>,
 ) -> Result<(), stravia_vendor_sdk::PluginError> {
     let access_token = secret(provider, "access_token")?;
+    let version = stravia_vendor_common::identity::version(provider, CLIENT_VERSION);
+    let originator = stravia_vendor_common::identity::text(&provider.options, "originator")
+        .unwrap_or(ORIGINATOR);
     set_header(headers, "authorization", format!("Bearer {access_token}"));
-    set_header(headers, "originator", ORIGINATOR.into());
+    set_header(headers, "originator", originator.into());
     set_header(
         headers,
         "user-agent",
-        format!("{ORIGINATOR}/{CLIENT_VERSION}"),
+        stravia_vendor_common::identity::user_agent(
+            provider,
+            &format!("{originator}/{{version}}"),
+            version,
+        ),
     );
-    set_header(headers, "version", CLIENT_VERSION.into());
+    set_header(headers, "version", version.into());
     if let Some(account_id) = provider
         .credentials
         .get("account_id")
@@ -1099,6 +1106,44 @@ mod tests {
                 ("transport_affinity".into(), "principal-target-scope".into()),
                 ("thread_id".into(), "not-a-scoped-key".into()),
             ]),
+        }
+    }
+
+    #[test]
+    fn outbound_identity_overrides_client_headers_for_http_and_websocket() {
+        let mut provider = provider();
+        provider.options.extend([
+            ("client_version".into(), json!("1.2.3")),
+            (
+                "user_agent".into(),
+                json!("codex_cli_rs/{version} (Linux; x86_64)"),
+            ),
+            ("originator".into(), json!("codex_cli_rs")),
+        ]);
+        provider
+            .client_headers
+            .push(("user-agent".into(), "untrusted-client".into()));
+        let session = NativeSession::new(&provider);
+        for operation in [
+            BodyOperation::Http,
+            BodyOperation::WebSocket,
+            BodyOperation::Search,
+            BodyOperation::Image,
+        ] {
+            let mut headers = provider.client_headers.clone();
+            append_runtime_headers(
+                &provider,
+                &json!({"model":"gpt-6-astra"}),
+                &session,
+                operation,
+                &mut headers,
+            )
+            .unwrap();
+            let values: BTreeMap<_, _> = headers.into_iter().collect();
+            assert_eq!(values["user-agent"], "codex_cli_rs/1.2.3 (Linux; x86_64)");
+            assert_eq!(values["version"], "1.2.3");
+            assert_eq!(values["authorization"], "Bearer test-token");
+            assert!(!values.values().any(|value| value == "untrusted-client"));
         }
     }
 

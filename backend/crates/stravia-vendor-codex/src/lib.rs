@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
 use stravia_runtime_contract::protocol::ids::OPEN_RESPONSES_2026_04_24;
 use stravia_runtime_contract::protocol::ir::AiRequest;
-use stravia_vendor_common::{common, thinking};
+use stravia_vendor_common::{common, identity, thinking};
 #[cfg(target_arch = "wasm32")]
 use stravia_vendor_sdk::VendorGuest;
 use stravia_vendor_sdk::{
@@ -48,7 +48,7 @@ pub fn descriptor() -> VendorDescriptor {
     ]);
     VendorDescriptor {
         vendor_id: VENDOR_ID.into(),
-        version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.responses.2"))
+        version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.responses.3"))
             .expect("package version must be valid semver"),
         display_name: "OpenAI Codex".into(),
         description: Some(
@@ -111,24 +111,43 @@ pub fn descriptor() -> VendorDescriptor {
                 id: "advanced".into(),
                 label: crate::messages::advanced(),
             }],
-            config_fields: vec![ConfigField {
-                key: "websocket_url".into(),
-                label: crate::messages::websocket_url(),
-                description: Some(crate::messages::websocket_description()),
-                kind: ConfigFieldKind::String { multiline: false },
-                required: false,
-                default_json: None,
-                group: Some("advanced".into()),
-                secret: false,
-                min: None,
-                max: None,
-                max_length: Some(4096),
-                pattern: Some(r"^wss?://.+".into()),
-                visible_when: None,
-            }],
+            config_fields: {
+                let mut fields = identity::fields(true);
+                fields.push(identity::field(
+                    "originator",
+                    "Originator",
+                    "来源标识",
+                    (
+                        "Outbound Codex originator; blank uses codex_cli_rs.",
+                        "上游 Codex 来源标识；留空使用 codex_cli_rs。",
+                    ),
+                    128,
+                ));
+                fields.push(ConfigField {
+                    key: "websocket_url".into(),
+                    label: crate::messages::websocket_url(),
+                    description: Some(crate::messages::websocket_description()),
+                    kind: ConfigFieldKind::String { multiline: false },
+                    required: false,
+                    default_json: None,
+                    group: Some("advanced".into()),
+                    secret: false,
+                    min: None,
+                    max: None,
+                    max_length: Some(4096),
+                    pattern: Some(r"^wss?://.+".into()),
+                    visible_when: None,
+                });
+                fields
+            },
             network: NetworkDeclaration {
                 base_url_field: None,
                 extra_origins: vec![
+                    OriginDeclaration {
+                        scheme: "https".into(),
+                        host: "api.github.com".into(),
+                        port: None,
+                    },
                     OriginDeclaration {
                         scheme: "https".into(),
                         host: "auth.openai.com".into(),
@@ -169,9 +188,17 @@ pub fn select_protocol(
 pub fn check_connection(
     host: &GuestHost,
     channel: &str,
-    provider: ProviderSnapshot,
+    mut provider: ProviderSnapshot,
 ) -> Result<stravia_vendor_sdk::ConnectionCheckResponse, PluginError> {
     require_route(channel, &provider)?;
+    identity::prepare(
+        host,
+        &mut provider,
+        "openai/codex",
+        "rust-v",
+        CLIENT_VERSION,
+        true,
+    )?;
     allowance::connection_check(host, &provider)
 }
 
@@ -179,12 +206,22 @@ pub fn execute(
     host: &GuestHost,
     operation: Operation,
     channel: &str,
-    input: OperationInput,
+    mut input: OperationInput,
 ) -> Result<OperationOutput, PluginError> {
     if input.operation() != operation {
         return Err(invalid("operation input does not match operation"));
     }
     require_route(channel, input.provider())?;
+    if !matches!(operation, Operation::Auth | Operation::ConfigValidation) {
+        identity::prepare(
+            host,
+            input.provider_mut(),
+            "openai/codex",
+            "rust-v",
+            CLIENT_VERSION,
+            matches!(operation, Operation::Discover | Operation::Allowance),
+        )?;
+    }
     match input {
         OperationInput::Infer { provider, request } => {
             infer(host, provider, request, Operation::Infer)
@@ -477,7 +514,7 @@ fn discover(
         .unwrap_or_else(|| endpoint(&provider.base_url, "/models"));
     url.push(if url.contains('?') { '&' } else { '?' });
     url.push_str("client_version=");
-    url.push_str(CLIENT_VERSION);
+    url.push_str(identity::version(&provider, CLIENT_VERSION));
     let mut headers = vec![("accept".into(), "application/json".into())];
     codex::append_identity_headers(&provider, &mut headers)?;
     let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
@@ -718,6 +755,13 @@ fn decorate_discovered_model(model: &mut DiscoveredModel) {
 
 fn validate_config(options: &BTreeMap<String, Value>) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
+    if let Err(error) = identity::validate(options) {
+        issues.push(ValidationIssue {
+            field: None,
+            code: "invalid_client_identity".into(),
+            message: stravia_vendor_sdk::LocalizedText::english(error.message),
+        });
+    }
     if let Some(value) = options.get("websocket_url")
         && !value.as_str().is_some_and(|value| {
             value.trim().is_empty()

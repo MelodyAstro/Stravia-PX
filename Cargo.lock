@@ -7791,6 +7791,7 @@ dependencies = [
  "reqwest-websocket",
  "rmcp",
  "rust_decimal",
+ "rustls-platform-verifier",
  "semver",
  "serde",
  "serde-saphyr",

@@ -799,6 +799,21 @@ impl OperationInput {
         }
     }
 
+    /// Adjust the operation-local provider snapshot without changing stored configuration.
+    pub fn provider_mut(&mut self) -> &mut ProviderSnapshot {
+        match self {
+            Self::Infer { provider, .. }
+            | Self::Compact { provider, .. }
+            | Self::Search { provider, .. }
+            | Self::MediaImage { provider, .. }
+            | Self::Auth { provider, .. }
+            | Self::Discover { provider, .. }
+            | Self::Allowance { provider, .. }
+            | Self::ConfigValidation { provider, .. }
+            | Self::ConnectionCheck { provider, .. } => provider,
+        }
+    }
+
     #[doc(hidden)]
     pub fn encode_for_host(
         &self,

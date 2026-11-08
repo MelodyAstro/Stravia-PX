@@ -22,16 +22,15 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stravia_runtime_contract::protocol::ids::ANTHROPIC_MESSAGES_2023_06_01;
 use stravia_runtime_contract::protocol::ir::{AiErrorKind, AiRequest};
-use stravia_vendor_common::common;
+use stravia_vendor_common::{common, identity};
 #[cfg(target_arch = "wasm32")]
 use stravia_vendor_sdk::VendorGuest;
 use stravia_vendor_sdk::{
     AuthCallback, AuthCallbackPort, AuthDescriptor, AuthFlow, AuthManualInput, AuthManualInputType,
-    CANONICAL_FORMAT_VERSION, Capability, ChannelDescriptor, ConfigField, ConfigFieldKind,
-    ConfigGroup, DataCompatibility, DiscoverRequest, DiscoverResponse, ErrorKind, GuestHost,
-    HttpRequest, NetworkDeclaration, Operation, OperationInput, OperationOutput, OriginDeclaration,
-    PluginError, ProviderDescriptor, ProviderSnapshot, VendorDescriptor, VendorKind,
-    read_http_body,
+    CANONICAL_FORMAT_VERSION, Capability, ChannelDescriptor, ConfigGroup, DataCompatibility,
+    DiscoverRequest, DiscoverResponse, ErrorKind, GuestHost, HttpRequest, NetworkDeclaration,
+    Operation, OperationInput, OperationOutput, OriginDeclaration, PluginError, ProviderDescriptor,
+    ProviderSnapshot, VendorDescriptor, VendorKind, read_http_body,
 };
 
 use request::{AccountIdentity, DEFAULT_CLIENT_VERSION};
@@ -41,7 +40,6 @@ const VENDOR_ID: &str = "claude-code";
 const CATALOG_ID: &str = "anthropic";
 const CHANNEL: &str = "oauth";
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
-const CLIENT_VERSION_FIELD: &str = "client_version";
 /// oh-my-pi 模型发现使用的 beta 集合（`openai-compat.ts` 的 `ANTHROPIC_OAUTH_BETA`）。
 const DISCOVERY_BETAS: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11";
 const MAX_MODELS_BODY: usize = 4 * 1024 * 1024;
@@ -53,10 +51,11 @@ pub fn descriptor() -> VendorDescriptor {
         Capability::AuthOauth,
         Capability::ModelDiscovery,
         Capability::Allowance,
+        Capability::ConfigValidation,
     ]);
     VendorDescriptor {
         vendor_id: VENDOR_ID.into(),
-        version: semver::Version::parse(env!("CARGO_PKG_VERSION"))
+        version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.identity.1"))
             .expect("package version must be valid semver"),
         display_name: "Claude Code".into(),
         description: Some(
@@ -117,24 +116,33 @@ pub fn descriptor() -> VendorDescriptor {
                 id: "advanced".into(),
                 label: crate::messages::advanced_group(),
             }],
-            config_fields: vec![ConfigField {
-                key: CLIENT_VERSION_FIELD.into(),
-                label: crate::messages::client_version(),
-                description: Some(crate::messages::client_version_description()),
-                kind: ConfigFieldKind::String { multiline: false },
-                required: false,
-                default_json: None,
-                group: Some("advanced".into()),
-                secret: false,
-                min: None,
-                max: None,
-                max_length: Some(32),
-                pattern: Some(r"^[0-9]+\.[0-9]+\.[0-9]+$".into()),
-                visible_when: None,
-            }],
+            config_fields: {
+                let mut fields = identity::fields(true);
+                for (key, en, zh) in [
+                    ("package_version", "SDK package version", "SDK 包版本"),
+                    ("runtime_version", "Runtime version", "运行时版本"),
+                    ("runtime", "Runtime", "运行时"),
+                    ("os", "Operating system", "操作系统"),
+                    ("arch", "Architecture", "架构"),
+                    ("timeout", "Client timeout header", "客户端超时头"),
+                    (
+                        "anthropic_version",
+                        "Anthropic API version",
+                        "Anthropic API 版本",
+                    ),
+                ] {
+                    fields.push(identity::field(key, en, zh, ("Optional outbound identity override. Blank keeps the provider default.", "可选的上游身份覆盖值；留空使用提供商默认值。"), 128));
+                }
+                fields
+            },
             network: NetworkDeclaration {
                 base_url_field: None,
                 extra_origins: vec![
+                    OriginDeclaration {
+                        scheme: "https".into(),
+                        host: "api.github.com".into(),
+                        port: None,
+                    },
                     OriginDeclaration {
                         scheme: "https".into(),
                         host: "claude.ai".into(),
@@ -166,9 +174,17 @@ pub fn select_protocol(
 pub fn check_connection(
     host: &GuestHost,
     channel: &str,
-    provider: ProviderSnapshot,
+    mut provider: ProviderSnapshot,
 ) -> Result<stravia_vendor_sdk::ConnectionCheckResponse, PluginError> {
     require_route(channel, &provider)?;
+    identity::prepare(
+        host,
+        &mut provider,
+        "anthropics/claude-code",
+        "v",
+        DEFAULT_CLIENT_VERSION,
+        true,
+    )?;
     allowance::connection_check(host, &provider)
 }
 
@@ -176,12 +192,22 @@ pub fn execute(
     host: &GuestHost,
     operation: Operation,
     channel: &str,
-    input: OperationInput,
+    mut input: OperationInput,
 ) -> Result<OperationOutput, PluginError> {
     if input.operation() != operation {
         return Err(invalid("operation input does not match operation"));
     }
     require_route(channel, input.provider())?;
+    if !matches!(operation, Operation::Auth | Operation::ConfigValidation) {
+        identity::prepare(
+            host,
+            input.provider_mut(),
+            "anthropics/claude-code",
+            "v",
+            DEFAULT_CLIENT_VERSION,
+            matches!(operation, Operation::Discover | Operation::Allowance),
+        )?;
+    }
     match input {
         OperationInput::Infer { provider, request } => {
             infer(host, &provider, request, Operation::Infer)
@@ -199,6 +225,12 @@ pub fn execute(
             provider,
             request: _,
         } => allowance::execute(host, &provider).map(OperationOutput::Allowance),
+        OperationInput::ConfigValidation { request, .. } => Ok(OperationOutput::ConfigValidation(
+            stravia_vendor_sdk::ConfigValidationResponse {
+                issues: identity::validation_issues(&request.options),
+                proposed_base_url: None,
+            },
+        )),
         other => Err(common::unsupported(
             &format!("{:?}", other.operation()),
             VENDOR_ID,
@@ -309,12 +341,13 @@ fn infer(
     );
     let shaped = request::encode(&body, client_version, &identity, &plan.context, compact)
         .map_err(invalid)?;
-    let headers = request::inference_headers(
+    let mut headers = request::inference_headers(
         access_token(provider)?,
         client_version,
         &plan.context,
         shaped.betas,
     );
+    identity::apply_claude(provider, &mut headers, DEFAULT_CLIENT_VERSION);
     // 每次实际模型请求之前都声明一次开始；宿主恢复重放时已经重置开始槽位。
     host.emit_started()?;
     let response = host.http_start_with_compression(
@@ -552,21 +585,23 @@ fn discover(
         url.push_str("?after_id=");
         url.push_str(cursor);
     }
+    let mut headers = vec![
+        ("anthropic-version".into(), "2023-06-01".into()),
+        (
+            "anthropic-dangerous-direct-browser-access".into(),
+            "true".into(),
+        ),
+        ("anthropic-beta".into(), DISCOVERY_BETAS.into()),
+        (
+            "authorization".into(),
+            format!("Bearer {}", access_token(provider)?),
+        ),
+    ];
+    identity::apply_claude(provider, &mut headers, DEFAULT_CLIENT_VERSION);
     let response = host.http_start(HttpRequest {
         method: "GET".into(),
         url,
-        headers: vec![
-            ("anthropic-version".into(), "2023-06-01".into()),
-            (
-                "anthropic-dangerous-direct-browser-access".into(),
-                "true".into(),
-            ),
-            ("anthropic-beta".into(), DISCOVERY_BETAS.into()),
-            (
-                "authorization".into(),
-                format!("Bearer {}", access_token(provider)?),
-            ),
-        ],
+        headers,
         body: Vec::new(),
     })?;
     let status = response.status()?;
@@ -596,13 +631,7 @@ fn discover(
 }
 
 fn client_version(provider: &ProviderSnapshot) -> &str {
-    provider
-        .options
-        .get(CLIENT_VERSION_FIELD)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_CLIENT_VERSION)
+    identity::version(provider, DEFAULT_CLIENT_VERSION)
 }
 
 fn credential<'a>(provider: &'a ProviderSnapshot, key: &str) -> Option<&'a str> {

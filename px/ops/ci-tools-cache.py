@@ -7,7 +7,7 @@ def digest(path):
  with path.open('rb') as stream:
   while data:=stream.read(1024*1024):h.update(data)
  return h.hexdigest()
-required=[root/'target/debug/stravia-build-vendors',root/'target/vendor-plugins/manifest.json',root/'target/wasm32-wasip2/release/stravia_vendor_codex.wasm',root/'target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm']
+required=[root/'target/debug/stravia-build-vendors',root/'target/vendor-plugins/manifest.json',root/'target/wasm32-wasip2/release/stravia_vendor_codex.wasm',root/'target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm',root/'target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm']
 manifest=json.loads(required[1].read_text())
 for component in manifest:
  filename=component['file'];assert pathlib.Path(filename).name==filename,'Invalid cached component path'

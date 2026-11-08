@@ -33,6 +33,9 @@ const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-0000000000aa";
 const DEVICE_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn artifact() -> std::path::PathBuf {
+    if let Some(path) = std::env::var_os("STRAVIA_CLAUDECODE_WASM") {
+        return path.into();
+    }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .join("target/vendor-plugins-all");
@@ -401,6 +404,114 @@ async fn run(
     runtime
         .execute(plugin, CHANNEL, operation, encoded, scope)
         .await
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires a freshly built Claude Code component"]
+async fn official_identity_sync_preserves_state_pins_and_last_good_version() {
+    let (runtime, plugin) = load_plugin().await;
+    let services = Arc::new(MockServices::default());
+    *services.private_state.lock() =
+        Some(json!({"oauth_marker":"preserved"}).to_string().into_bytes());
+    services.script.lock().extend([
+        (
+            200,
+            "application/json",
+            json!({"tag_name":"v9.0.0-beta","draft":false,"prerelease":true}).to_string(),
+            None,
+        ),
+        (
+            200,
+            "application/json",
+            json!([{"tag_name":"v9.2.0","draft":false,"prerelease":false}]).to_string(),
+            None,
+        ),
+        (
+            200,
+            "application/json",
+            json!({"data":[]}).to_string(),
+            None,
+        ),
+    ]);
+    let mut snapshot = signed_in();
+    snapshot
+        .options
+        .insert("auto_sync_client_version".into(), json!(true));
+    let discovery = |provider: ProviderSnapshot| OperationInput::Discover {
+        provider,
+        request: DiscoverRequest { cursor: None },
+    };
+    run(&runtime, &plugin, &services, discovery(snapshot.clone()))
+        .await
+        .unwrap();
+    {
+        let requests = services.requests.lock();
+        assert_eq!(requests.len(), 3);
+        for request in &requests[..2] {
+            assert!(
+                request
+                    .url
+                    .starts_with("https://api.github.com/repos/anthropics/claude-code/releases")
+            );
+            assert!(
+                !request
+                    .headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("authorization")
+                        || name.eq_ignore_ascii_case("cookie"))
+            );
+        }
+        assert_eq!(
+            wire_header(&requests[2], "user-agent"),
+            "claude-cli/9.2.0 (external, cli)"
+        );
+    }
+    let mut state: Value =
+        serde_json::from_slice(services.private_state.lock().as_ref().unwrap()).unwrap();
+    assert_eq!(state["oauth_marker"], "preserved");
+    services.requests.lock().clear();
+    services
+        .script
+        .lock()
+        .push_back((200, "application/json", "{\"data\":[]}".into(), None));
+    run(&runtime, &plugin, &services, discovery(snapshot.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        services.requests.lock().len(),
+        1,
+        "fresh sync must be cached"
+    );
+    state["client_identity_version_v1"]["checked_at_ms"] = json!(0);
+    *services.private_state.lock() = Some(state.to_string().into_bytes());
+    services.requests.lock().clear();
+    services.script.lock().extend([
+        (503, "application/json", "{}".into(), None),
+        (200, "application/json", "{\"data\":[]}".into(), None),
+    ]);
+    run(&runtime, &plugin, &services, discovery(snapshot.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        wire_header(&services.requests.lock()[1], "user-agent"),
+        "claude-cli/9.2.0 (external, cli)"
+    );
+    services.requests.lock().clear();
+    snapshot
+        .options
+        .insert("client_version".into(), json!("2.3.4"));
+    services
+        .script
+        .lock()
+        .push_back((200, "application/json", "{\"data\":[]}".into(), None));
+    run(&runtime, &plugin, &services, discovery(snapshot))
+        .await
+        .unwrap();
+    assert_eq!(services.requests.lock().len(), 1);
+    assert_eq!(
+        wire_header(&services.requests.lock()[0], "user-agent"),
+        "claude-cli/2.3.4 (external, cli)"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

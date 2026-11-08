@@ -941,7 +941,9 @@ impl Gateway {
             .descriptor()
             .provider(&provider.provider_id)
             .ok_or_else(|| anyhow::anyhow!("vendor operation profile is unavailable"))?;
-        let clients = self.vendor_client_snapshot(use_proxy).await?;
+        let clients = self
+            .vendor_client_snapshot(use_proxy, &provider.options)
+            .await?;
         if context.cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled.into());
         }

@@ -12,6 +12,7 @@ mod provider_model_sync;
 mod runtime;
 #[cfg(test)]
 mod vendor_auxiliary_tests;
+mod vendor_transport;
 
 pub use builder::GatewayBuilder;
 use extensions::configure_gateway_extensions;
