@@ -21,6 +21,20 @@ pub struct PlatformToolRegistry {
 }
 
 impl PlatformToolRegistry {
+    pub(crate) fn with_additional(
+        &self,
+        tools: Vec<Arc<dyn PlatformTool>>,
+    ) -> Result<Self, stravia_runtime_contract::hook::HookError> {
+        if tools.is_empty() {
+            return Ok(self.clone());
+        }
+        let mut all: Vec<_> = self.tools.values().cloned().collect();
+        all.extend(tools);
+        Self::new(all).map_err(|error| stravia_runtime_contract::hook::HookError::Runtime {
+            message: error.to_string(),
+        })
+    }
+
     pub fn new(tools: Vec<Arc<dyn PlatformTool>>) -> Result<Self, PlatformToolError> {
         let mut registered = HashMap::new();
         for tool in tools {

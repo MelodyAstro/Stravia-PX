@@ -103,6 +103,8 @@ import type {
   ConfirmPluginUpdate,
   PluginPreview,
   PluginSummary,
+  PlatformPluginSummary,
+  PlatformPluginSettings,
 } from '#lib/types.js'
 
 export { isTauri }
@@ -172,6 +174,17 @@ async function uploadWasm<T>(path: string, file: File): Promise<T> {
 }
 
 export const admin = {
+  platformPlugins: {
+    list: () => request<PlatformPluginSummary[]>('GET', '/platform-plugins'),
+    install: (file: File, expectedId?: string) =>
+      uploadWasm<PlatformPluginSummary>(
+        expectedId === undefined ? '/platform-plugins' : `/platform-plugins/${encodeURIComponent(expectedId)}`,
+        file,
+      ),
+    settings: (id: string, input: PlatformPluginSettings) =>
+      request<PlatformPluginSummary>('PUT', `/platform-plugins/${encodeURIComponent(id)}/settings`, input),
+    uninstall: (id: string) => request<void>('DELETE', `/platform-plugins/${encodeURIComponent(id)}`),
+  },
   currency: {
     /** `null` means the instance still uses USD. */
     get: async (): Promise<CustomCurrency | null> =>

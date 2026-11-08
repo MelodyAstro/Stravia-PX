@@ -136,7 +136,12 @@ impl ServerHandler for StraviaMcpServer {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.tool_definitions.get(name).cloned()
+        self.tool_definitions.get(name).cloned().or_else(|| {
+            self.gateway
+                .mcp_registry
+                .resolve(name)
+                .map(|tool| tool_definition(tool.as_ref()))
+        })
     }
 
     async fn call_tool(

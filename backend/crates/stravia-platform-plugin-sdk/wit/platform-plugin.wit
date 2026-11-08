@@ -1,0 +1,8 @@
+package stravia:platform-plugin@1.0.0;
+
+/// JSON messages are versioned by the manifest's api_version. There are no
+/// Stravia host imports: a guest cannot access providers, credentials or storage.
+world platform-plugin {
+    export describe: func() -> result<string, string>;
+    export invoke: func(operation: string, input: string) -> result<string, string>;
+}
