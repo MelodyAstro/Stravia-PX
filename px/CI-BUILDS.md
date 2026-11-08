@@ -5,14 +5,16 @@ Pushes to `main` rebuild when backend, frontend, toolchain, lock files, or this 
 The workflow runs on GitHub-hosted Ubuntu 22.04 (glibc 2.35), without Docker.
 No local compilation or production credentials are required.
 
-The workflow builds the embedded Base component, managed Codex and GA components,
-runs protocol and targeted Core regressions, builds the optimized server, and
+The workflow builds the embedded Base component and managed Codex, GA and Claude Code
+components, runs identity, actual TLS ClientHello, protocol and targeted Core regressions,
+builds the optimized server, and
 uploads a private artifact named `stravia-px-linux-x86_64-gnu-<full commit>`.
 Artifacts are kept for 14 days. Rust build caches are reused on later runs.
 
 Download the successful run's artifact, verify `SHA256SUMS`, and check the exact
 `source_commit`, run URL and file digests in `build-manifest.json`. The package
-contains the host, Base/Codex/GA Wasm components, immutable WebUI assets, and the
+contains the host, Base/Codex/GA/Claude Code Wasm components, the installable platform
+plugin example, immutable WebUI assets, and the
 complete patch from the recorded official base. Keep a verified package with
 local recovery backups before the artifact expires.
 
@@ -33,8 +35,8 @@ This avoids uploading build binaries through public inference endpoints.
 
 In addition to Cargo dependencies and intermediate files, an exact-source cache
 keeps the compiled `stravia-build-vendors` helper, Base manifest/Wasm and the
-Codex/GA Wasm components. The key includes runner OS/architecture, pinned Rust,
-lock files, Cargo configuration and all relevant component/SDK/codec sources.
+Codex/GA/Claude Code Wasm components. The key includes runner OS/architecture,
+pinned Rust, lock files, Cargo configuration and all relevant component/SDK/codec sources.
 A changed input creates a new cache; no broad fallback key reuses old binaries.
 Restored files are verified against their recorded SHA256 and size before use.
 

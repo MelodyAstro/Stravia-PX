@@ -18,7 +18,7 @@ module_spec.loader.exec_module(deploy)
 COMMIT = '1' * 40
 
 
-def make_package(directory, *, invalid_manifest=False, extra=None):
+def make_package(directory, *, invalid_manifest=False, extra=None, identity=False):
     files = {
         'stravia-server': b'isolated native executable fixture',
         'base.wasm': b'base component', 'codex.wasm': b'codex component',
@@ -26,6 +26,8 @@ def make_package(directory, *, invalid_manifest=False, extra=None):
         'policy-tools.wasm': b'optional independent component',
         'immutable/entry/app.js': b'export const deployment = "verified";\n',
     }
+    if identity:
+        files['claudecode.wasm'] = b'Claude Code identity component'
     manifest = {
         'source_commit': COMMIT, 'source_base_commit': '2' * 40,
         'upstream_tag': 'v0.6.4', 'build_target': 'x86_64-unknown-linux-gnu',
@@ -35,6 +37,8 @@ def make_package(directory, *, invalid_manifest=False, extra=None):
         'files': {name: {'sha256': hashlib.sha256(body).hexdigest(), 'bytes': len(body)}
                   for name, body in files.items() if '/' not in name},
     }
+    if identity:
+        manifest['features'].append('outbound_identity_tls_v1')
     if invalid_manifest:
         manifest['files']['codex.wasm']['sha256'] = '0' * 64
     files['build-manifest.json'] = json.dumps(manifest).encode()
@@ -57,6 +61,53 @@ def inspect(package, files):
 
 
 class NativePackageTests(unittest.TestCase):
+    def test_identity_package_stages_claude_and_upgrades_only_explicitly_pinned_installed_vendors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package, files = make_package(root, identity=True)
+            inspected = inspect(package, files)
+            candidate = root / 'candidate'
+            deploy.stage_package(package, inspected, candidate, root / 'static')
+            self.assertEqual((candidate / 'claudecode.wasm').read_bytes(), files['claudecode.wasm'])
+            spec = {'vendor_versions': dict.fromkeys(deploy.VENDORS, '0.6.4')}
+            self.assertEqual(deploy.deployment_vendors(spec, inspected, deploy.VENDORS), deploy.VENDORS)
+            installed = {**deploy.VENDORS, **deploy.OPTIONAL_VENDORS}
+            with self.assertRaisesRegex(RuntimeError, 'Pin the installed optional Vendor'):
+                deploy.deployment_vendors(spec, inspected, installed)
+            spec['vendor_versions']['claude-code'] = '0.6.4+masub.identity.1'
+            self.assertEqual(deploy.deployment_vendors(spec, inspected, installed), installed)
+            with self.assertRaisesRegex(RuntimeError, 'must already be installed'):
+                deploy.deployment_vendors(spec, inspected, deploy.VENDORS)
+
+    def test_legacy_package_preserves_optional_vendor_and_rejects_missing_pinned_component(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            package, files = make_package(Path(temporary))
+            inspected = inspect(package, files)
+            installed = {**deploy.VENDORS, **deploy.OPTIONAL_VENDORS}
+            spec = {'vendor_versions': dict.fromkeys(deploy.VENDORS, '0.6.4')}
+            self.assertEqual(deploy.deployment_vendors(spec, inspected, installed), deploy.VENDORS)
+            spec['vendor_versions']['claude-code'] = '0.6.4+masub.identity.1'
+            with self.assertRaisesRegex(RuntimeError, 'absent from the package'):
+                deploy.deployment_vendors(spec, inspected, installed)
+
+    def test_vendor_spec_allows_pinned_claude_but_rejects_unknown_or_missing_required_vendors(self):
+        spec = {
+            'package_sha256': '1' * 64, 'build_manifest_sha256': '2' * 64,
+            'previous_host_sha256': '3' * 64, 'source_commit': COMMIT,
+            'release_name': 'identity-candidate', 'package_path': str(Path.cwd() / 'native.tar.gz'),
+            'vendor_versions': dict.fromkeys(deploy.VENDORS, '0.6.4'),
+        }
+        deploy.validate_spec(spec)
+        spec['vendor_versions']['claude-code'] = '0.6.4+masub.identity.1'
+        deploy.validate_spec(spec)
+        spec['vendor_versions']['unmanaged'] = '1.0.0'
+        with self.assertRaisesRegex(RuntimeError, 'vendor_versions must pin'):
+            deploy.validate_spec(spec)
+        del spec['vendor_versions']['unmanaged']
+        del spec['vendor_versions']['base']
+        with self.assertRaisesRegex(RuntimeError, 'vendor_versions must pin'):
+            deploy.validate_spec(spec)
+
     def test_source_bound_package_stages_assets_without_overwriting_existing_content(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
