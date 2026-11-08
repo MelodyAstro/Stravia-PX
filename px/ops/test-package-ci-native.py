@@ -117,6 +117,7 @@ class NativePackageTests(unittest.TestCase):
             "target/vendor-plugins/stravia-vendor-base.wasm": b"base component fixture",
             "target/wasm32-wasip2/release/stravia_vendor_codex.wasm": b"codex component fixture",
             "target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm": b"antigravity component fixture",
+            "target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm": b"claude identity component fixture",
             "target/wasm32-wasip2/release/stravia_platform_plugin_example.wasm": b"platform policy/tools fixture",
         }
         for name, content in components.items():
@@ -140,6 +141,7 @@ class NativePackageTests(unittest.TestCase):
         self.assertEqual(manifest["source_base_commit"], self.base)
         self.assertIn("platform_plugins_v1", manifest["features"])
         self.assertIn("native_custom_tools_v1", manifest["features"])
+        self.assertIn("outbound_identity_tls_v1", manifest["features"])
         self.assertEqual(manifest["platform_plugins"]["sdk"]["api_version"], 1)
         self.assertEqual(manifest["platform_plugins"]["wit"]["api_version"], 1)
         self.assertEqual(manifest["platform_plugins"]["wit"]["sha256"], PACKAGER.digest(self.repo / PACKAGER.WIT_PATH))
@@ -151,7 +153,7 @@ class NativePackageTests(unittest.TestCase):
             # The manifest cannot contain its own hash; it is covered by SHA256SUMS.
             flat_payload = {member.name for member in archive.getmembers() if member.isfile() and "/" not in member.name and member.name != "build-manifest.json"}
             self.assertEqual(flat_payload, set(manifest["files"]))
-            self.assertEqual(flat_payload, {"stravia-server", "base.wasm", "codex.wasm", "antigravity.wasm", "policy-tools.wasm", "source.patch"})
+            self.assertEqual(flat_payload, {"stravia-server", "base.wasm", "codex.wasm", "antigravity.wasm", "claudecode.wasm", "policy-tools.wasm", "source.patch"})
             for name in flat_payload:
                 content = archive.extractfile(name).read()
                 self.assertEqual(manifest["files"][name], {"sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)})

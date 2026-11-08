@@ -33,7 +33,7 @@ pub(crate) fn execute(
     provider: &ProviderSnapshot,
 ) -> Result<AllowanceResponse, PluginError> {
     let access_token = access_token(provider)?;
-    let response = host.http_start(usage_request(access_token))?;
+    let response = host.http_start(usage_request(provider, access_token))?;
     let status = response.status()?;
     let headers = response.headers()?;
     let body = read_http_body(&response, MAX_USAGE_BODY)?;
@@ -47,7 +47,7 @@ pub(crate) fn execute(
     // 订阅等级不在 usage 响应里；Claude Code 自己登录/刷新时也向
     // `/api/oauth/profile` 取 `organization_type` 与 `rate_limit_tier`。
     // 该接口失败不影响额度展示，因此失败时保持 None。
-    let plan = fetch_profile_plan(host, access_token);
+    let plan = fetch_profile_plan(host, provider, access_token);
     response.plan_label = plan.as_deref().and_then(display_name);
     // 等级能确定时才给出计费建议；价格为 Anthropic 官方页面公布的美元月费。
     response.billing = plan.as_deref().and_then(billing_for_plan);
@@ -63,15 +63,15 @@ pub(crate) fn connection_check(
     host: &GuestHost,
     provider: &ProviderSnapshot,
 ) -> Result<ConnectionCheckResponse, PluginError> {
-    let value = connection_check::json(host, usage_request(access_token(provider)?))?;
+    let value = connection_check::json(host, usage_request(provider, access_token(provider)?))?;
     validate_usage(&value)?;
     Ok(ConnectionCheckResponse {
         verified: ConnectionCheckVerification::Credentials,
     })
 }
 
-fn usage_request(access_token: &str) -> HttpRequest {
-    HttpRequest {
+fn usage_request(provider: &ProviderSnapshot, access_token: &str) -> HttpRequest {
+    let mut request = HttpRequest {
         method: "GET".into(),
         url: USAGE_URL.into(),
         headers: vec![
@@ -82,7 +82,13 @@ fn usage_request(access_token: &str) -> HttpRequest {
             ("authorization".into(), format!("Bearer {access_token}")),
         ],
         body: Vec::new(),
-    }
+    };
+    stravia_vendor_common::identity::apply_claude(
+        provider,
+        &mut request.headers,
+        DEFAULT_CLIENT_VERSION,
+    );
+    request
 }
 
 /// 接受 `limits` 的空列表和缺省窗口；只要出现的已知字段类型正确即可通过，
@@ -123,18 +129,23 @@ fn validate_usage(value: &Value) -> Result<(), PluginError> {
 
 /// 取规范化订阅标识（见 `profile_plan`）。profile 接口只用于展示与计费建议，
 /// 失败或无 `user:profile` 权限时降级为 `None`，不让一次附加请求拖垮额度刷新。
-fn fetch_profile_plan(host: &GuestHost, access_token: &str) -> Option<String> {
+fn fetch_profile_plan(
+    host: &GuestHost,
+    provider: &ProviderSnapshot,
+    access_token: &str,
+) -> Option<String> {
+    let mut headers = vec![
+        ("accept".into(), "application/json, text/plain, */*".into()),
+        ("anthropic-beta".into(), "oauth-2025-04-20".into()),
+        ("content-type".into(), "application/json".into()),
+        ("authorization".into(), format!("Bearer {access_token}")),
+    ];
+    stravia_vendor_common::identity::apply_claude(provider, &mut headers, DEFAULT_CLIENT_VERSION);
     let response = host
         .http_start(HttpRequest {
             method: "GET".into(),
             url: PROFILE_URL.into(),
-            headers: vec![
-                ("accept".into(), "application/json, text/plain, */*".into()),
-                ("anthropic-beta".into(), "oauth-2025-04-20".into()),
-                ("content-type".into(), "application/json".into()),
-                ("user-agent".into(), cli_user_agent(DEFAULT_CLIENT_VERSION)),
-                ("authorization".into(), format!("Bearer {access_token}")),
-            ],
+            headers,
             body: Vec::new(),
         })
         .ok()?;

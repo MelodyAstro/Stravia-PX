@@ -29,6 +29,7 @@ pub mod guest;
 mod host_api;
 mod language_tag;
 mod request_compat;
+pub mod transport;
 
 #[cfg(test)]
 #[allow(dead_code)]

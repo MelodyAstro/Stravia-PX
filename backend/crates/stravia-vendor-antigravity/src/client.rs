@@ -5,6 +5,7 @@ use stravia_vendor_sdk::{ErrorKind, GuestHost, PluginError, ProviderSnapshot, re
 pub(crate) const MAX_JSON_BODY: usize = 4 * 1024 * 1024;
 
 pub(crate) fn headers(provider: &ProviderSnapshot) -> Result<Vec<(String, String)>, PluginError> {
+    stravia_vendor_common::identity::validate(&provider.options)?;
     let token = credential(provider, "access_token")
         .ok_or_else(|| plugin_error(ErrorKind::Auth, "Antigravity access token is missing"))?;
     if token.bytes().any(|byte| byte.is_ascii_control()) {
@@ -17,7 +18,14 @@ pub(crate) fn headers(provider: &ProviderSnapshot) -> Result<Vec<(String, String
     Ok(vec![
         ("authorization".into(), format!("Bearer {token}")),
         ("content-type".into(), "application/json".into()),
-        ("user-agent".into(), crate::CLI_USER_AGENT.into()),
+        (
+            "user-agent".into(),
+            stravia_vendor_common::identity::user_agent(
+                provider,
+                "antigravity/cli/{version} (aidev_client; os_type=linux; arch=amd64; auth_method=consumer)",
+                stravia_vendor_common::identity::version(provider, "1.3.5"),
+            ),
+        ),
     ])
 }
 

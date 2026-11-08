@@ -7,6 +7,9 @@
 最新状态见 [自定义工具修复与 Team 部署记录](DEPLOYMENT-custom-tools.md)，备份与清理见
 [恢复说明](RECOVERY.md)。
 
+Claude、Codex 和 GA 的服务端身份、自定义 UA 与 TLS，以及官方客户端版本同步见
+[上游请求身份配置](OUTBOUND-IDENTITY.md)。
+
 ## 当前补丁
 
 - **通用平台插件**：独立 Wasm 组件安装、热更新和配置，支持请求/响应/工具结果钩子、

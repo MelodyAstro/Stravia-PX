@@ -39,10 +39,11 @@ pub fn descriptor() -> VendorDescriptor {
         Capability::AuthOauth,
         Capability::ModelDiscovery,
         Capability::Allowance,
+        Capability::ConfigValidation,
     ]);
     VendorDescriptor {
         vendor_id: VENDOR_ID.into(),
-        version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.cc.1")).expect("valid package version"),
+        version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.cc.2")).expect("valid package version"),
         display_name: "Antigravity".into(),
         description: Some("Antigravity CLI OAuth models, native image generation, and account quota monitoring.".into()),
         authors: vec!["Stravia".into()],
@@ -81,7 +82,8 @@ pub fn descriptor() -> VendorDescriptor {
             website: Some("https://antigravity.google".into()),
             implementation: None,
             config_groups: Vec::new(),
-            config_fields: vec![
+            config_fields: {
+                let mut fields = vec![
                 ConfigField {
                     key: cc_compat::OPTION.into(),
                     label: messages::cc_compat_label(),
@@ -112,7 +114,11 @@ pub fn descriptor() -> VendorDescriptor {
                     pattern: None,
                     visible_when: Some(FieldCondition { field: cc_compat::OPTION.into(), equals: serde_json::json!(true) }),
                 },
-            ],
+                ];
+                fields.extend(stravia_vendor_common::identity::fields(false));
+                fields.push(stravia_vendor_common::identity::field("client_version", "Antigravity client version", "Antigravity 客户端版本", ("Manual Antigravity version used by {version} in the outbound User-Agent.", "用于上游 UA 中 {version} 的 Antigravity 版本固定值。"), 32));
+                fields
+            },
             network: NetworkDeclaration {
                 base_url_field: None,
                 extra_origins: ["oauth2.googleapis.com"]
@@ -191,6 +197,12 @@ pub fn execute(
             provider,
             request: _,
         } => allowance::execute(host, &provider).map(OperationOutput::Allowance),
+        OperationInput::ConfigValidation { request, .. } => Ok(OperationOutput::ConfigValidation(
+            stravia_vendor_sdk::ConfigValidationResponse {
+                issues: stravia_vendor_common::identity::validation_issues(&request.options),
+                proposed_base_url: None,
+            },
+        )),
         _ => Err(common::unsupported(operation.as_str(), VENDOR_ID, channel)),
     }
 }
