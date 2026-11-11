@@ -12,4 +12,11 @@ Strinova 基于 [StraviaPlatform v0.6.5](https://github.com/Stravia-AI/StraviaPl
 
 测试和使用边界见 [维护说明](https://github.com/MelodyAstro/Strinova/tree/main/px)、[账号额度控制](https://github.com/MelodyAstro/Strinova/blob/main/px/ACCOUNT-CONTROLS.md)及[凭据迁移说明](https://github.com/MelodyAstro/Strinova/blob/main/px/CREDENTIAL-IMPORT.md)。
 
+线上验收中，GPT-Private 的 HTTP、WebSocket、命名空间函数和自定义工具往返通过；Claude 的中性 system 合成请求（7 条消息、38 个工具、32000 输出上限、adaptive thinking）以及字典工具往返通过。仍有以下限制：
+
+- 含特定 `Anthropic` 身份描述的 system 请求仍可能被 Antigravity 上游返回 `429 RESOURCE_EXHAUSTED`，即使额度面板显示有余额、兼容编码已经执行。原兼容开关已保留，不能据此保证所有 Claude Code 请求成功；该失败样本未计入通过结果。
+- 本次部署的 Team OAuth 连接在上游返回 401 后需要重新授权；账号分组保持隔离，不会借用 Private 凭据。此为该连接的实际状态，不代表所有 Team 账号均不可用。
+
 Native Linux release built from upstream StraviaPlatform 0.6.5 with the Strinova compatibility components, model mapping plugin, account controls and OAuth credential migration. Source attribution and AGPL-3.0-only licensing are preserved. Verify SHA256SUMS and build-manifest.json before installation; restore both data and the matching program when rolling back.
+
+Live validation passed for Private HTTP/WebSocket and function/custom-tool round trips, and for neutral-system Claude fixtures including 38 tools and tool results. Known limitation: Antigravity can still return upstream 429 for specific system identity descriptions despite available quota and an active compatibility switch. The deployment's Team OAuth connection also requires reauthorization after upstream 401; it remains isolated from Private. These failing cases are not reported as passing.
