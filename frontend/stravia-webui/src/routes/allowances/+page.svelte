@@ -764,7 +764,7 @@ function allowanceErrorMessage(category: ProviderAllowanceErrorCategory): string
               {/if}
             </div>
           {/if}
-          {#if snapshot && ['openai-codex', 'claude-code'].includes(snapshot.catalog_provider_id)}
+            {#if provider.target.account_controls_supported}
             <AccountResetControl
               {providerId}
               available={provider.allowances.find((item) => item.key === 'reset_credits')?.remaining?.value ?? null}

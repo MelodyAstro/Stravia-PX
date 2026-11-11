@@ -97,10 +97,7 @@ impl AdminService {
             .vendor
             .as_deref()
             .context("Provider has no vendor")?;
-        let descriptor = self.gw.vendor_plugins.descriptor(vendor)?;
-        let profile = descriptor
-            .provider(provider.preset_key.as_deref().unwrap_or(vendor))
-            .context("Provider profile is missing")?;
+        let profile = self.gw.vendor_plugins.descriptor(vendor)?;
         ensure!(
             profile.capabilities.contains(&Capability::AllowanceControl),
             "Provider does not support manual reset controls"

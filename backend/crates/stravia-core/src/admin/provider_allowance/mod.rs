@@ -24,6 +24,8 @@ pub(crate) use service::{ProviderAllowanceState, SAMPLE_INTERVAL};
 /// `refreshing` marks that an upstream fetch is in flight for this provider.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderAllowanceTarget {
+    #[serde(default)]
+    pub account_controls_supported: bool,
     pub provider_id: String,
     pub provider_name: String,
     pub catalog_provider_id: String,

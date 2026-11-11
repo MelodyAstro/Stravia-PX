@@ -443,6 +443,15 @@ async fn allowance_target(
         .get_provider_allowance_suspension(&provider.id)
         .await?;
     Ok(ProviderAllowanceTarget {
+        account_controls_supported: provider
+            .vendor
+            .as_deref()
+            .and_then(|vendor| admin.gw.vendor_plugins.descriptor(vendor).ok())
+            .is_some_and(|descriptor| {
+                descriptor
+                    .capabilities
+                    .contains(&stravia_vendor_sdk::Capability::AllowanceControl)
+            }),
         guard_supported: true,
         suspension,
         provider_id: provider.id.clone(),

@@ -46,6 +46,7 @@ export interface ProviderAllowanceError {
 }
 
 export interface ProviderAllowanceTarget {
+  account_controls_supported?: boolean
   provider_id: string
   guard_supported: boolean
   suspension: AllowanceSuspension | null
