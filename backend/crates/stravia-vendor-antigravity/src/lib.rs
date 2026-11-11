@@ -75,7 +75,7 @@ pub fn descriptor() -> VendorDescriptor {
                 default_models_source: None,
                 consumes_catalog_models: false,
                 capabilities: capabilities.clone(),
-                client_header_names: BTreeSet::new(),
+                client_header_names: stravia_vendor_common::identity::client_header_names(),
                 model_capabilities: BTreeSet::new(),
             }],
             capabilities,

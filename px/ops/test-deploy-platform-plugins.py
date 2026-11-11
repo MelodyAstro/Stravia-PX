@@ -61,6 +61,15 @@ def inspect(package, files):
 
 
 class NativePackageTests(unittest.TestCase):
+    def test_upstream_upgrade_requires_exact_pins_and_rejects_downgrade(self):
+        deploy.validate_release_transition('v0.6.4', 'v0.6.4', {})
+        with self.assertRaisesRegex(RuntimeError, 'pinned previous'):
+            deploy.validate_release_transition('v0.6.4', 'v0.6.5', {})
+        pins = {'previous_upstream_tag':'v0.6.4', 'target_upstream_tag':'v0.6.5'}
+        deploy.validate_release_transition('v0.6.4', 'v0.6.5', pins)
+        with self.assertRaisesRegex(RuntimeError, 'downgrade'):
+            deploy.validate_release_transition('v0.6.5', 'v0.6.4', {'previous_upstream_tag':'v0.6.5', 'target_upstream_tag':'v0.6.4'})
+
     def test_identity_package_stages_claude_and_upgrades_only_explicitly_pinned_installed_vendors(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

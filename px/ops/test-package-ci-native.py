@@ -113,6 +113,7 @@ class NativePackageTests(unittest.TestCase):
     def test_package_hashes_every_flat_payload_and_preserves_managed_components(self):
         head = self.change_source()
         components = {
+            "target/wasm32-wasip2/release/strinova_model_mapping.wasm": b"model mapping",
             "target/release/stravia-server": b"native host fixture",
             "target/vendor-plugins/stravia-vendor-base.wasm": b"base component fixture",
             "target/wasm32-wasip2/release/stravia_vendor_codex.wasm": b"codex component fixture",
@@ -153,7 +154,7 @@ class NativePackageTests(unittest.TestCase):
             # The manifest cannot contain its own hash; it is covered by SHA256SUMS.
             flat_payload = {member.name for member in archive.getmembers() if member.isfile() and "/" not in member.name and member.name != "build-manifest.json"}
             self.assertEqual(flat_payload, set(manifest["files"]))
-            self.assertEqual(flat_payload, {"stravia-server", "base.wasm", "codex.wasm", "antigravity.wasm", "claudecode.wasm", "policy-tools.wasm", "source.patch"})
+            self.assertEqual(flat_payload, {"stravia-server", "base.wasm", "codex.wasm", "antigravity.wasm", "claudecode.wasm", "model-mapping.wasm", "policy-tools.wasm", "source.patch"})
             for name in flat_payload:
                 content = archive.extractfile(name).read()
                 self.assertEqual(manifest["files"][name], {"sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)})

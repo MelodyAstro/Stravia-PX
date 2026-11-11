@@ -187,7 +187,11 @@ async function capture(enabled: boolean | null): Promise<void> {
                       tools: sample.tools,
                       count: sample.count,
                     })}
+                    {#if sample.client} · {sample.client.family}{#if sample.client.version} {sample.client.version}{/if}{/if}
                   </div>
+                  {#if sample.parameters}
+                    <div class="text-xs text-muted-foreground">{m.request_models_parameter_summary({ output: sample.parameters.max_output_tokens ?? "—", budget: sample.parameters.thinking_budget_tokens ?? "—", effort: sample.parameters.thinking_level ?? "—" })}</div>
+                  {/if}
                 </div>
                 <Button
                   type="button"

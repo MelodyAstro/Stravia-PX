@@ -34,11 +34,15 @@ pub(crate) fn headers(provider: &ProviderSnapshot) -> Result<Fields, PluginError
     // Go HTTP/1 writes its transport-owned framing fields in these slots.
     let mut headers = Fields::new();
     headers.slot("Host");
-    headers.append("User-Agent", stravia_vendor_common::identity::user_agent(
-        provider,
-        "antigravity/cli/{version} (aidev_client; os_type=linux; arch=amd64; cl=1015175089; auth_method=consumer)",
-        stravia_vendor_common::identity::version(provider, "1.5.2"),
-    ).into_bytes());
+    headers.append(
+        "User-Agent",
+        stravia_vendor_common::identity::user_agent(
+            provider,
+            &crate::CLI_USER_AGENT.replace("1.5.2", "{version}"),
+            stravia_vendor_common::identity::version(provider, "1.5.2"),
+        )
+        .into_bytes(),
+    );
     headers.slot("Content-Length");
     headers.append("Authorization", format!("Bearer {token}").into_bytes());
     headers.append("Content-Type", b"application/json".as_slice());

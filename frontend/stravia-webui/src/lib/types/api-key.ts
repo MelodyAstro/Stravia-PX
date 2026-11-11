@@ -23,6 +23,8 @@ export interface RequestModelsView {
       input_items: number
       tools: number
       count: number
+      client?: { family: string; version: string | null; runtime_version: string | null; os: string | null; arch: string | null; suggested_http_shape: string | null; suggested_ws_shape: string | null }
+      parameters?: { max_output_tokens: number | null; thinking_budget_tokens: number | null; thinking_level: string | null; thinking_enabled: boolean }
     }[]
   }
   suggestions: { request_model: string; target_model_id: string | null; candidates: string[] }[]

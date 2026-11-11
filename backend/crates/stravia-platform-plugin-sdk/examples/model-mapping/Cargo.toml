@@ -1,0 +1,17 @@
+[package]
+name = "strinova-model-mapping"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+stravia-platform-plugin-sdk = { workspace = true }

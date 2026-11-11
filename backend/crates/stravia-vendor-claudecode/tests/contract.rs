@@ -528,7 +528,7 @@ async fn run(
 async fn official_identity_sync_connection_check_is_read_only() {
     let (runtime, plugin) = load_plugin().await;
     for (seed, expected_version) in [
-        (None, "2.1.317"),
+        (None, "2.1.319"),
         (
             Some(json!({
                 "oauth_marker":"preserved",

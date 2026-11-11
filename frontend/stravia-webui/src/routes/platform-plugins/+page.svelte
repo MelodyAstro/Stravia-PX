@@ -165,6 +165,8 @@ async function uninstall(): Promise<void> {
 
 function hookLabel(hook: string): string {
   switch (hook) {
+    case 'resolve_model':
+      return m.platform_plugins_hook_resolve_model()
     case 'request':
       return m.platform_plugins_hook_request()
     case 'upstream_response':

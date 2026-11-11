@@ -1,5 +1,9 @@
 # Outbound request identity and TLS
 
+For v0.6.5 see [current identity and recognition settings](OUTBOUND-IDENTITY-v0.6.5.md).
+The remaining sections describe the previous v0.6.4 transport. v0.6.5 uses the
+official Rama/patched-Rustls transport and captured egress shapes instead.
+
 Provider settings expose these fields in the existing generated form (English and Chinese).
 They apply to the server-to-provider connection. Client UA, SDK, OS and TLS are not adopted.
 

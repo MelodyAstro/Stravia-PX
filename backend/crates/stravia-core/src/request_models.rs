@@ -117,8 +117,40 @@ pub(crate) async fn resolve_mapping(
     requested: &str,
 ) -> anyhow::Result<(Option<RouteConfig>, bool)> {
     let config = load(gateway, principal.api_key_id()).await?;
+    let key = gateway.admin().get_api_key(principal.api_key_id()).await?;
+    let eligible = {
+        let cache = gateway.model_cache.read().await;
+        if cache
+            .models
+            .iter()
+            .any(|model| model.id.as_str() == requested)
+        {
+            return Ok((cache.resolve(requested).cloned(), false));
+        }
+        cache
+            .models
+            .iter()
+            .filter(|model| {
+                key.is_enabled
+                    && (key.model_ids.is_empty()
+                        || key.model_ids.iter().any(|id| id == model.id.as_str()))
+            })
+            .map(|model| RequestModelTarget {
+                id: model.id.to_string(),
+                model_id: model.model_id.to_string(),
+                display_name: model.effective_display_name().into(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let plugin_target = gateway
+        .platform_plugins
+        .resolve_model(requested, &config, &eligible)
+        .await?;
+    let mapped = match &plugin_target {
+        Some(target) => target.as_deref(),
+        None => config.target(requested),
+    };
     let cache = gateway.model_cache.read().await;
-    let mapped = config.target(requested);
     let route = match mapped {
         Some(target) => cache
             .models
@@ -146,6 +178,8 @@ pub struct RequestModelSample {
     pub input_items: usize,
     pub tools: usize,
     pub count: u32,
+    pub client: stravia_vendor_sdk::client_identity::ClientProfile,
+    pub parameters: RequestParameterSummary,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -155,6 +189,14 @@ pub struct RequestModelCapture {
     pub samples: Vec<RequestModelSample>,
     /// Additional distinct shapes were not retained; never silently truncate.
     pub dropped_samples: u32,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RequestParameterSummary {
+    pub max_output_tokens: Option<u32>,
+    pub thinking_budget_tokens: Option<u32>,
+    pub thinking_level: Option<String>,
+    pub thinking_enabled: bool,
 }
 
 struct Session {
@@ -271,6 +313,21 @@ impl CaptureStore {
                     })
                     .sum::<usize>(),
             count: 0,
+            client: stravia_vendor_sdk::client_identity::ClientProfile::from_headers(
+                envelope
+                    .headers
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+            ),
+            parameters: RequestParameterSummary {
+                max_output_tokens: request.generation.max_tokens,
+                thinking_budget_tokens: request.reasoning.budget_tokens,
+                thinking_level: request
+                    .reasoning
+                    .level
+                    .map(|level| format!("{level:?}").to_ascii_lowercase()),
+                thinking_enabled: request.reasoning.is_enabled(),
+            },
         };
         if let Some(existing) = session.view.samples.iter_mut().find(|s| {
             s.request_model == sample.request_model
@@ -279,6 +336,8 @@ impl CaptureStore {
                 && s.stream == sample.stream
                 && s.input_items == sample.input_items
                 && s.tools == sample.tools
+                && s.client == sample.client
+                && s.parameters == sample.parameters
         }) {
             existing.count = existing.count.saturating_add(1);
         } else if session.view.samples.len() < MAX_SAMPLES {

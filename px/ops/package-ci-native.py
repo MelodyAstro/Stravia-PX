@@ -105,6 +105,7 @@ def package_native(repo, out, environment, *, base_commit=BASE_COMMIT, rust_vers
         "codex.wasm": repo / "target/wasm32-wasip2/release/stravia_vendor_codex.wasm",
         "antigravity.wasm": repo / "target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm",
         "claudecode.wasm": repo / "target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm",
+        "model-mapping.wasm": repo / "target/wasm32-wasip2/release/strinova_model_mapping.wasm",
         "policy-tools.wasm": repo / "target/wasm32-wasip2/release/stravia_platform_plugin_example.wasm",
     }
     files = {
@@ -125,7 +126,7 @@ def package_native(repo, out, environment, *, base_commit=BASE_COMMIT, rust_vers
         "source_commit": commit,
         "features": [
             "positional_additional_tools", "per_key_request_model_mapping_v1",
-            "native_custom_tools_v1", "platform_plugins_v1", "outbound_identity_tls_v1",
+            "native_custom_tools_v1", "platform_plugins_v1", "outbound_identity_tls_v1", "request_model_plugin_v1",
         ],
         "build_target": "x86_64-unknown-linux-gnu",
         "glibc_baseline": "2.35",
@@ -152,7 +153,7 @@ def package_native(repo, out, environment, *, base_commit=BASE_COMMIT, rust_vers
         raise RuntimeError("The WebUI immutable assets are missing")
     manifest_path = out / "build-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    package = out / ("stravia-px-v" + version + "-linux-x86_64-gnu.tar.gz")
+    package = out / ("strinova-v" + version + "-linux-x86_64-gnu.tar.gz")
     with tarfile.open(package, "w:gz", compresslevel=6) as archive:
         for name, path in files.items():
             archive.add(path, arcname=name, recursive=False)

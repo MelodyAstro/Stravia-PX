@@ -17,6 +17,7 @@ pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum HookKind {
     Request,
+    ResolveModel,
     UpstreamResponse,
     ToolResult,
     ClientOutput,
@@ -26,6 +27,7 @@ impl HookKind {
     pub const fn operation(self) -> &'static str {
         match self {
             Self::Request => "request",
+            Self::ResolveModel => "resolve_model",
             Self::UpstreamResponse => "upstream_response",
             Self::ToolResult => "tool_result",
             Self::ClientOutput => "client_output",
@@ -81,7 +83,7 @@ impl PluginManifest {
         }
         semver::Version::parse(&self.version)
             .map_err(|_| "plugin version must be semantic versioning".to_string())?;
-        if self.hooks.len() > 4
+        if self.hooks.len() > 5
             || self.hooks.iter().collect::<HashSet<_>>().len() != self.hooks.len()
         {
             return Err("plugin hook declarations must be unique".into());

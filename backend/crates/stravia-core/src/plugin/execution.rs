@@ -982,12 +982,25 @@ impl Gateway {
             .provider(&provider.provider_id)
             .ok_or_else(|| anyhow::anyhow!("vendor operation profile is unavailable"))?;
         let mut proxy = self.vendor_proxy_snapshot(use_proxy).await?;
-        let profile = stravia_vendor_sdk::transport::TransportProfile::from_options(&provider.options)
-            .map_err(anyhow::Error::msg)?;
+        let profile =
+            stravia_vendor_sdk::transport::TransportProfile::from_options(&provider.options)
+                .map_err(anyhow::Error::msg)?;
         if profile.http1_only {
             proxy.force_http1();
         }
         let shapes = plugin.shapes.with_transport_profile(&profile)?;
+        let ua = provider
+            .client_headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+            .map(|(_, value)| value.as_str());
+        let shape_overrides = [false, true]
+            .map(|ws| stravia_vendor_sdk::transport::shape_override(&provider.options, ws, ua));
+        let [http_shape, ws_shape] = shape_overrides;
+        let shape_overrides = [
+            http_shape.map_err(anyhow::Error::msg)?,
+            ws_shape.map_err(anyhow::Error::msg)?,
+        ];
         if context.cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled.into());
         }
@@ -1033,12 +1046,17 @@ impl Gateway {
                 shapes,
                 resolver: Arc::clone(&self.vendor_resolver),
             },
-            { let mut settings = proxy.into_settings(); settings.force_http1 |= profile.http1_only; settings },
+            {
+                let mut settings = proxy.into_settings();
+                settings.force_http1 |= profile.http1_only;
+                settings
+            },
             origins,
             operation.clone(),
             context.cancellation.clone(),
             provider.protocol.clone(),
         )
+        .with_shape_overrides(shape_overrides)
         .with_observer(context.observer.clone())
         .with_observation_scope(context.model_turn_id.clone(), context.attempt_id.clone())
         .with_send_admission(context.send_admission.clone())

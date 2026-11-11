@@ -1,4 +1,4 @@
-//! Provider-owned outbound identity. Caller headers never select these values.
+//! Configured or explicitly enabled client-supplied outbound identity.
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
@@ -21,10 +21,29 @@ pub fn text<'a>(options: &'a BTreeMap<String, Value>, key: &str) -> Option<&'a s
 }
 
 pub fn version<'a>(provider: &'a ProviderSnapshot, fallback: &'a str) -> &'a str {
+    if client_mode(provider) {
+        if let Some(value) =
+            client_header(provider, "version").filter(|v| stable_version(v).is_some())
+        {
+            return value;
+        }
+        if let Some(value) = client_header(provider, "user-agent")
+            .and_then(|ua| ua.split_once('/'))
+            .map(|(_, v)| v.split_whitespace().next().unwrap_or(""))
+            .filter(|v| stable_version(v).is_some())
+        {
+            return value;
+        }
+    }
     text(&provider.options, "client_version").unwrap_or(fallback)
 }
 
 pub fn user_agent(provider: &ProviderSnapshot, fallback: &str, version: &str) -> String {
+    if client_mode(provider) {
+        if let Some(ua) = client_header(provider, "user-agent") {
+            return ua.to_owned();
+        }
+    }
     text(&provider.options, "user_agent")
         .unwrap_or(fallback)
         .replace("{version}", version)
@@ -63,6 +82,12 @@ pub fn fields(sync: bool) -> Vec<ConfigField> {
         ),
         1024,
     )];
+    fields.push(ConfigField {
+        key: "identity_source".into(), label: localized("Client identity source", "客户端身份来源"),
+        description: Some(localized("Configured values or request-scoped client identity headers. Credentials and session IDs remain host-owned; TLS uses a separate outbound preset.", "使用云端配置，或按请求透传客户端身份头；凭据和会话标识仍由平台管理，TLS 另选出站预设。")),
+        kind: ConfigFieldKind::Enum { options: [("configured", "Cloud configuration", "云端配置"), ("client", "Request client", "请求客户端")].into_iter().map(|(value,en,zh)| stravia_vendor_sdk::EnumOption { value: value.into(), label: localized(en,zh) }).collect() },
+        required: false, default_json: Some(json!("configured")), group: None, secret: false, min: None, max: None, max_length: None, pattern: None, visible_when: None,
+    });
     if sync {
         let mut version = field(
             "client_version",
@@ -123,6 +148,7 @@ pub fn apply_claude(
             set_header(headers, name, value.into());
         }
     }
+    apply_client_headers(provider, headers);
 }
 
 pub fn set_header(headers: &mut Vec<(String, String)>, name: &str, value: String) {
@@ -146,6 +172,12 @@ fn stable_version(raw: &str) -> Option<[u64; 3]> {
 }
 
 pub fn validate(options: &BTreeMap<String, Value>) -> Result<(), PluginError> {
+    if options
+        .get("identity_source")
+        .is_some_and(|v| !matches!(v.as_str(), Some("configured" | "client")))
+    {
+        return Err(invalid("Identity source must be configured or client"));
+    }
     if options
         .get("client_version")
         .is_some_and(|v| !v.is_string())
@@ -218,7 +250,8 @@ pub fn prepare(
     refresh: bool,
 ) -> Result<(), PluginError> {
     validate(&provider.options)?;
-    if text(&provider.options, "client_version").is_some()
+    if client_mode(provider)
+        || text(&provider.options, "client_version").is_some()
         || provider
             .options
             .get("auto_sync_client_version")
@@ -417,6 +450,56 @@ mod tests {
             ("auto_sync_client_version", json!("true")),
         ] {
             assert!(validate(&BTreeMap::from([(key.into(), value)])).is_err());
+        }
+    }
+}
+
+pub fn client_mode(provider: &ProviderSnapshot) -> bool {
+    text(&provider.options, "identity_source") == Some("client")
+}
+
+pub fn client_header<'a>(provider: &'a ProviderSnapshot, name: &str) -> Option<&'a str> {
+    let mut values = provider
+        .client_headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case(name));
+    let (_, value) = values.next()?;
+    // Ambiguous or malformed input never becomes an upstream identity.
+    (values.next().is_none()
+        && !value.is_empty()
+        && value.len() <= 1024
+        && value.bytes().all(|b| b.is_ascii() && !b.is_ascii_control()))
+    .then_some(value.as_str())
+}
+
+pub fn client_header_names() -> std::collections::BTreeSet<String> {
+    [
+        "user-agent",
+        "version",
+        "originator",
+        "x-stainless-lang",
+        "x-stainless-package-version",
+        "x-stainless-os",
+        "x-stainless-arch",
+        "x-stainless-runtime",
+        "x-stainless-runtime-version",
+        "x-stainless-timeout",
+        "anthropic-version",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+/// Only software identity fields cross this boundary, never auth, cookies,
+/// routing, forwarded IPs or session/thread identifiers. No shared state is written.
+pub fn apply_client_headers(provider: &ProviderSnapshot, headers: &mut Vec<(String, String)>) {
+    if !client_mode(provider) {
+        return;
+    }
+    for name in client_header_names() {
+        if let Some(value) = client_header(provider, &name) {
+            set_header(headers, &name, value.into());
         }
     }
 }

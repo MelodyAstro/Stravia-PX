@@ -262,6 +262,7 @@ pub(crate) struct VendorNetworkConfig {
 pub(crate) struct VendorNetwork {
     transport: Arc<transport::VendorTransport>,
     shapes: Arc<ShapeRegistry>,
+    shape_overrides: [Option<String>; 2],
     proxy: OutboundProxySettings,
     resolver: Arc<dyn transport::Resolver>,
     origins: NetworkPolicy,
@@ -320,6 +321,7 @@ impl VendorNetwork {
         Self {
             transport,
             shapes: network.shapes,
+            shape_overrides: Default::default(),
             proxy,
             resolver: network.resolver,
             origins,
@@ -336,6 +338,24 @@ impl VendorNetwork {
             send_admission: None,
             cookie_scope: None,
         }
+    }
+
+    pub(crate) fn with_shape_overrides(mut self, shapes: [Option<String>; 2]) -> Self {
+        self.shape_overrides = shapes;
+        self
+    }
+
+    fn effective_options(
+        &self,
+        mut options: net::Options,
+        websocket: bool,
+    ) -> Result<net::Options, HostFailure> {
+        if let Some(shape) = &self.shape_overrides[usize::from(websocket)] {
+            options
+                .shape(shape)
+                .map_err(|error| HostFailure::new(ErrorKind::Invalid, error.to_string()))?;
+        }
+        Ok(options)
     }
 
     pub(crate) fn with_cookie_scope(
@@ -733,6 +753,7 @@ impl VendorNetwork {
         request: net::Request,
         options: net::Options,
     ) -> Result<Arc<dyn HostHttpResponse>, HostFailure> {
+        let options = self.effective_options(options, false)?;
         let url = self.url(&request.url, false)?;
         let method = Method::from_bytes(request.method.as_bytes())
             .map_err(|_| HostFailure::new(ErrorKind::Invalid, "invalid HTTP method"))?;
@@ -936,6 +957,7 @@ impl VendorNetwork {
         request: net::ConnectRequest,
         options: net::Options,
     ) -> Result<Arc<dyn HostWebSocket>, HostFailure> {
+        let options = self.effective_options(options, true)?;
         let NetworkRoute {
             transport: route,
             cookies,

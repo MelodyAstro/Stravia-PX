@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use stravia_platform_plugin_runtime::LoadedPlugin;
 use stravia_runtime_contract::CancellationToken;
 use stravia_runtime_contract::hook::*;
-use stravia_runtime_contract::protocol::ir::{AiRequest, AiResponse, AiItem};
+use stravia_runtime_contract::protocol::ir::{AiItem, AiRequest, AiResponse};
 
 use super::{HookKind, ToolManifest, schema};
 
@@ -37,6 +37,15 @@ pub(crate) fn snapshot_tools(snapshots: &[PluginSnapshot]) -> Vec<Arc<dyn Platfo
 pub(crate) fn snapshot_hooks(snapshots: &[PluginSnapshot]) -> Vec<Arc<dyn Hook>> {
     snapshots
         .iter()
+        .filter(|snapshot| {
+            !snapshot.loaded.manifest().tools.is_empty()
+                || snapshot
+                    .loaded
+                    .manifest()
+                    .hooks
+                    .iter()
+                    .any(|kind| *kind != HookKind::ResolveModel)
+        })
         .map(|snapshot| Arc::new(PluginHook(snapshot.clone())) as Arc<dyn Hook>)
         .collect()
 }
@@ -237,7 +246,7 @@ impl Hook for PluginHook {
             .manifest()
             .hooks
             .iter()
-            .map(|kind| event_kind(*kind))
+            .filter_map(|kind| event_kind(*kind))
             .collect();
         if !self.0.loaded.manifest().tools.is_empty()
             && !descriptor.event_kinds.contains(&EventKind::Request)
@@ -265,7 +274,11 @@ struct PluginHookSession {
 impl HookSession for PluginHookSession {
     async fn handle(&mut self, event: HookEvent<'_>) -> Result<ActionBatch, String> {
         let request_scope = match &event {
-            HookEvent::Request { current, input_start, .. } => Some((*current, *input_start)),
+            HookEvent::Request {
+                current,
+                input_start,
+                ..
+            } => Some((*current, *input_start)),
             _ => None,
         };
         let kind = match event.kind() {
@@ -313,13 +326,14 @@ impl HookSession for PluginHookSession {
     }
 }
 
-fn event_kind(kind: HookKind) -> EventKind {
-    match kind {
+fn event_kind(kind: HookKind) -> Option<EventKind> {
+    Some(match kind {
+        HookKind::ResolveModel => return None,
         HookKind::Request => EventKind::Request,
         HookKind::UpstreamResponse => EventKind::UpstreamResponse,
         HookKind::ToolResult => EventKind::ToolResult,
         HookKind::ClientOutput => EventKind::ClientOutput,
-    }
+    })
 }
 
 fn event_input(event: HookEvent<'_>) -> anyhow::Result<(HookKind, &'static str, Value)> {
@@ -433,9 +447,13 @@ enum PluginAction {
 }
 
 impl PluginAction {
-    fn into_actions(self, request_scope: Option<(&AiRequest, usize)>) -> Result<Vec<HookAction>, String> {
+    fn into_actions(
+        self,
+        request_scope: Option<(&AiRequest, usize)>,
+    ) -> Result<Vec<HookAction>, String> {
         if let Self::ReplaceRequest { value } = self {
-            let (current, input_start) = request_scope.ok_or("replace_request requires a request event")?;
+            let (current, input_start) =
+                request_scope.ok_or("replace_request requires a request event")?;
             return legacy_request_actions(current, input_start, *value);
         }
         Ok(vec![match self {
@@ -451,7 +469,12 @@ impl PluginAction {
             Self::SetReasoning { value } => {
                 HookAction::PatchResponse(ResponsePatch::SetReasoning(value))
             }
-            Self::SpliceInput { start, end, items } => HookAction::PatchRequest(Box::new(RequestPatch::SpliceInput { range: start..end, items })),
+            Self::SpliceInput { start, end, items } => {
+                HookAction::PatchRequest(Box::new(RequestPatch::SpliceInput {
+                    range: start..end,
+                    items,
+                }))
+            }
             Self::ReplaceRequest { .. } => unreachable!("handled above"),
             Self::ReplaceResponse { value } => {
                 HookAction::PatchResponse(ResponsePatch::ReplaceCanonical(value))
@@ -481,17 +504,32 @@ impl PluginAction {
 
 /// Translate the v1 whole-request action into admitted v0.6.5 patches. Already
 /// processed history and host metadata cannot be rewritten by this adapter.
-fn legacy_request_actions(current: &AiRequest, input_start: usize, next: AiRequest) -> Result<Vec<HookAction>, String> {
+fn legacy_request_actions(
+    current: &AiRequest,
+    input_start: usize,
+    next: AiRequest,
+) -> Result<Vec<HookAction>, String> {
     if input_start > current.items.len() || input_start > next.items.len() {
         return Err("replace_request removed processed history".into());
     }
     let mut before = serde_json::to_value(current).map_err(|e| e.to_string())?;
     let mut after = serde_json::to_value(&next).map_err(|e| e.to_string())?;
-    for key in ["model", "instructions", "items", "generation", "tools", "tool_choice", "parameters"] {
+    for key in [
+        "model",
+        "instructions",
+        "items",
+        "generation",
+        "tools",
+        "tool_choice",
+        "parameters",
+    ] {
         before.as_object_mut().unwrap().remove(key);
         after.as_object_mut().unwrap().remove(key);
     }
-    if before != after || serde_json::to_value(&current.items[..input_start]).map_err(|e|e.to_string())? != serde_json::to_value(&next.items[..input_start]).map_err(|e|e.to_string())? {
+    if before != after
+        || serde_json::to_value(&current.items[..input_start]).map_err(|e| e.to_string())?
+            != serde_json::to_value(&next.items[..input_start]).map_err(|e| e.to_string())?
+    {
         return Err("replace_request changed protected fields or processed history; use splice_input for new input".into());
     }
     let patches = vec![
@@ -501,9 +539,15 @@ fn legacy_request_actions(current: &AiRequest, input_start: usize, next: AiReque
         RequestPatch::ReplaceTools(next.tools),
         RequestPatch::SetToolChoice(next.tool_choice),
         RequestPatch::SetParameters(Box::new(next.parameters)),
-        RequestPatch::SpliceInput { range: 0..current.items.len()-input_start, items: next.items.into_iter().skip(input_start).collect() },
+        RequestPatch::SpliceInput {
+            range: 0..current.items.len() - input_start,
+            items: next.items.into_iter().skip(input_start).collect(),
+        },
     ];
-    Ok(patches.into_iter().map(|patch| HookAction::PatchRequest(Box::new(patch))).collect())
+    Ok(patches
+        .into_iter()
+        .map(|patch| HookAction::PatchRequest(Box::new(patch)))
+        .collect())
 }
 
 #[cfg(test)]
@@ -684,7 +728,7 @@ mod tests {
                 original: &snapshot,
                 read_scope: ReadExposureScope::NONE,
                 current: &request,
-            input_start: 0,
+                input_start: 0,
                 context: &snapshot,
                 route: Some(&route),
                 round: 0,

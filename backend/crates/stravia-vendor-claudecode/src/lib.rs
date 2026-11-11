@@ -240,7 +240,7 @@ pub fn descriptor() -> VendorDescriptor {
                 default_models_source: None,
                 consumes_catalog_models: false,
                 capabilities: capabilities.clone(),
-                client_header_names: BTreeSet::new(),
+                client_header_names: stravia_vendor_common::identity::client_header_names(),
                 model_capabilities: BTreeSet::new(),
             }],
             capabilities,
@@ -658,18 +658,18 @@ fn discover(
         url.push_str(cursor);
     }
     let mut headers = vec![
-                ("Accept".into(), "application/json".into()),
-                ("anthropic-version".into(), "2023-06-01".into()),
-                (
-                    "anthropic-dangerous-direct-browser-access".into(),
-                    "true".into(),
-                ),
-                ("anthropic-beta".into(), DISCOVERY_BETAS.into()),
-                (
-                    "authorization".into(),
-                    format!("Bearer {}", access_token(provider)?),
-                ),
-            ];
+        ("Accept".into(), "application/json".into()),
+        ("anthropic-version".into(), "2023-06-01".into()),
+        (
+            "anthropic-dangerous-direct-browser-access".into(),
+            "true".into(),
+        ),
+        ("anthropic-beta".into(), DISCOVERY_BETAS.into()),
+        (
+            "authorization".into(),
+            format!("Bearer {}", access_token(provider)?),
+        ),
+    ];
     identity::apply_claude(provider, &mut headers, DEFAULT_CLIENT_VERSION);
     let response = host.http_start(net_request("GET", url, headers, Vec::new()), &net_options())?;
     let status = response.status()?;

@@ -22,6 +22,7 @@ pub mod bindings {
 }
 
 pub mod catalog;
+pub mod client_identity;
 mod descriptor;
 mod envelope;
 #[doc(hidden)]
@@ -30,8 +31,8 @@ mod host_api;
 mod language_tag;
 pub mod net;
 mod request_compat;
-pub mod transport;
 pub mod state;
+pub mod transport;
 
 #[cfg(test)]
 #[allow(dead_code)]

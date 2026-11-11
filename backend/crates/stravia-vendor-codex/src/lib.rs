@@ -103,7 +103,7 @@ pub fn descriptor() -> VendorDescriptor {
                 consumes_catalog_models: false,
                 capabilities: capabilities.clone(),
                 // 会话头已由宿主归一为统一 session 字段，安装与 turn 身份由插件私有状态生成。
-                client_header_names: BTreeSet::new(),
+                client_header_names: stravia_vendor_common::identity::client_header_names(),
                 model_capabilities: BTreeSet::new(),
             }],
             capabilities,
@@ -468,7 +468,10 @@ fn discover(
     url.push_str(identity::version(&provider, CLIENT_VERSION));
     // Official 0.167.0 `/models` capture: version, auth identity, then the
     // reqwest default Accept.
-    let mut headers = vec![("version".into(), identity::version(&provider, CLIENT_VERSION).into())];
+    let mut headers = vec![(
+        "version".into(),
+        identity::version(&provider, CLIENT_VERSION).into(),
+    )];
     codex::append_identity_headers(&provider, &mut headers)?;
     headers.push(("accept".into(), "*/*".into()));
     let response = host.http_start(

@@ -885,7 +885,10 @@ pub(super) fn append_runtime_headers(
     transport.retain(|(name, _)| {
         name.eq_ignore_ascii_case("accept") || name.eq_ignore_ascii_case("content-type")
     });
-    headers.push(("version".into(), stravia_vendor_common::identity::version(provider, CLIENT_VERSION).into()));
+    headers.push((
+        "version".into(),
+        stravia_vendor_common::identity::version(provider, CLIENT_VERSION).into(),
+    ));
     headers.push(("x-codex-beta-features".into(), BETA_FEATURES.into()));
     headers.push(("x-codex-window-id".into(), session.window_id.clone()));
     let turn_metadata = body
@@ -936,7 +939,16 @@ pub(super) fn append_identity_headers(
         set_header(headers, "chatgpt-account-id", account_id);
     }
     set_header(headers, "originator", originator.into());
-    set_header(headers, "user-agent", stravia_vendor_common::identity::user_agent(provider, &user_agent().replace(CLIENT_VERSION, "{version}"), version));
+    set_header(
+        headers,
+        "user-agent",
+        stravia_vendor_common::identity::user_agent(
+            provider,
+            &user_agent().replace(CLIENT_VERSION, "{version}"),
+            version,
+        ),
+    );
+    stravia_vendor_common::identity::apply_client_headers(provider, headers);
     Ok(())
 }
 
@@ -2417,13 +2429,7 @@ mod tests {
             let mut body = turn_body();
             session.project_body(&mut body).unwrap();
             let mut headers = provider.client_headers.clone();
-            append_runtime_headers(
-                &provider,
-                &body,
-                &session,
-                &mut headers,
-            )
-            .unwrap();
+            append_runtime_headers(&provider, &body, &session, &mut headers).unwrap();
             let values: BTreeMap<_, _> = headers.into_iter().collect();
             assert_eq!(values["user-agent"], "codex_cli_rs/1.2.3 (Linux; x86_64)");
             assert_eq!(values["version"], "1.2.3");

@@ -163,7 +163,10 @@ jobs:
 
       - name: Build installable platform plugin example
         if: inputs.tools_only != true
-        run: task build:platform-plugin-example
+        run: |
+          task build:platform-plugin-example
+          cargo build --locked --release --lib --target wasm32-wasip2 -p strinova-model-mapping
+          cargo test --locked --release -p strinova-model-mapping --lib
 
       - name: Verify platform plugin SDK and sandbox
         if: inputs.tools_only != true
@@ -178,7 +181,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --locked --release -p stravia-vendor-sdk --lib transport::tests
+          cargo test --locked --release -p stravia-vendor-sdk --lib
           cargo test --locked --release -p stravia-vendor-common --lib identity::tests
           cargo test --locked --release -p stravia-vendor-codex -p stravia-vendor-claudecode --lib
           STRAVIA_CLAUDECODE_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm" cargo test --locked --release -p stravia-vendor-claudecode --test contract official_identity_sync -- --ignored
@@ -207,7 +210,9 @@ jobs:
 
       - name: Package source-bound host and components
         if: inputs.tools_only != true
-        run: python3 px/ops/package-ci-native.py
+        run: |
+          python3 px/ops/package-ci-native.py
+          python3 px/ops/export-plugin-patches.py
 
       - name: Verify compiled-tool cache checkpoint
         run: python3 px/ops/ci-tools-cache.py verify

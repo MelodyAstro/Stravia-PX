@@ -28,7 +28,7 @@ STATIC = Path('/var/www/stravia/_app/immutable')
 MAINT = Path('/usr/local/sbin/stravia-maint')
 REQUIRED_FILES = {'stravia-server', 'base.wasm', 'codex.wasm',
                   'antigravity.wasm', 'source.patch', 'build-manifest.json'}
-OPTIONAL_FILES = {'policy-tools.wasm', 'claudecode.wasm'}
+OPTIONAL_FILES = {'policy-tools.wasm', 'model-mapping.wasm', 'claudecode.wasm'}
 VENDORS = {'base': 'base.wasm', 'openai-codex': 'codex.wasm',
            'antigravity': 'antigravity.wasm'}
 OPTIONAL_VENDORS = {'claude-code': 'claudecode.wasm'}
@@ -341,6 +341,16 @@ def disk_plan(spec, inspected, static_root):
             'required_free_bytes': candidate_bytes + new_assets + gzip_reserve + backup_reserve + rollback_reserve + margin}
 
 
+def validate_release_transition(previous, target, spec):
+    if previous == target:
+        return
+    require(spec.get("previous_upstream_tag") == previous and spec.get("target_upstream_tag") == target,
+            "Upstream upgrade requires pinned previous and target versions")
+    require(re.fullmatch(r"v\d+\.\d+\.\d+", previous) and re.fullmatch(r"v\d+\.\d+\.\d+", target), "Invalid release version")
+    parse = lambda value: tuple(map(int, value[1:].split(".")))
+    require(parse(target) > parse(previous), "Upstream downgrade requires full backup restore")
+
+
 def current_release(spec, manifest):
     previous = (ROOT / 'current').resolve()
     require(previous.is_relative_to((ROOT / 'releases').resolve()),
@@ -351,8 +361,7 @@ def current_release(spec, manifest):
     ga = read_json(ROOT / 'compat/manifest.json')
     require(responses['host_sha256'] == spec['previous_host_sha256'],
             'Active Responses manifest does not match current host')
-    require(manifest['upstream_tag'] == responses['upstream_tag'],
-            'This script only replaces a build on the same upstream version')
+    validate_release_transition(responses['upstream_tag'], manifest['upstream_tag'], spec)
     require(set(responses.get('features', [])) <= set(manifest['features']),
             'Candidate would discard an active managed feature')
     for directory, metadata in [('responses-compat', responses), ('compat', ga)]:

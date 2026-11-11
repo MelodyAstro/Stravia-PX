@@ -97,6 +97,11 @@ impl TransportProfile {
         {
             return Err("HTTP version must be auto or http1".into());
         }
+        for key in ["tls_shape", "tls_ws_shape"] {
+            if let Some(value) = get(key)? {
+                validate_shape(&value)?;
+            }
+        }
         Ok(Self {
             min_version,
             max_version,
@@ -120,6 +125,16 @@ fn text(en: &str, zh: &str) -> LocalizedText {
 
 pub fn config_fields() -> Vec<ConfigField> {
     let mut fields = Vec::new();
+    for (key, en, zh) in [
+        ("tls_shape", "HTTP egress shape", "HTTP 出站特征"),
+        (
+            "tls_ws_shape",
+            "WebSocket egress shape",
+            "WebSocket 出站特征",
+        ),
+    ] {
+        fields.push(ConfigField { key: key.into(), label: text(en,zh), description: Some(text("Select a host TLS/HTTP preset, or infer a known preset from the request User-Agent. This creates a new TLS connection; it cannot forward the inbound TLS handshake.", "选择宿主 TLS/HTTP 预设，或依据请求 UA 识别已知预设；这是新的出站 TLS 连接，不是透传入站握手。")), kind: ConfigFieldKind::Enum { options: SHAPES.iter().map(|value| EnumOption { value: (*value).into(), label: text(value,value) }).collect() }, required:false, default_json:Some(Value::String("vendor".into())), group:None, secret:false,min:None,max:None,max_length:None,pattern:None,visible_when:None });
+    }
     for (key, en, zh, description, choices) in [
         (
             "tls_min_version",
@@ -246,4 +261,58 @@ mod tests {
         assert_eq!(profile.cipher_suites[0], "TLS13_CHACHA20_POLY1305_SHA256");
         assert_eq!(profile.key_exchange_groups, ["X25519", "secp256r1"]);
     }
+}
+
+const SHAPES: &[&str] = &[
+    "vendor",
+    "client",
+    "default",
+    "claude-code",
+    "bun",
+    "bun-1-3-14",
+    "antigravity",
+    "codex-http",
+    "codex-ws",
+    "command-code",
+    "devin",
+    "grok",
+];
+fn validate_shape(value: &str) -> Result<(), String> {
+    if SHAPES.contains(&value) {
+        Ok(())
+    } else {
+        Err("Unknown outbound shape".into())
+    }
+}
+pub fn shape_override(
+    options: &BTreeMap<String, Value>,
+    websocket: bool,
+    user_agent: Option<&str>,
+) -> Result<Option<String>, String> {
+    let key = if websocket {
+        "tls_ws_shape"
+    } else {
+        "tls_shape"
+    };
+    let shape = options.get(key).and_then(Value::as_str).unwrap_or("vendor");
+    validate_shape(shape)?;
+    if shape == "vendor" {
+        return Ok(None);
+    }
+    if shape != "client" {
+        return Ok(Some(shape.to_owned()));
+    }
+    let ua = user_agent
+        .ok_or("A request User-Agent is required to identify an outbound preset")?
+        .to_ascii_lowercase();
+    let known = if ua.starts_with("claude-cli/") || ua.starts_with("claude-code/") {
+        "claude-code"
+    } else if ua.starts_with("codex") {
+        if websocket { "codex-ws" } else { "codex-http" }
+    } else if ua.starts_with("antigravity/") {
+        "antigravity"
+    } else {
+        return Err("The client User-Agent has no known outbound TLS preset".into());
+    };
+    Ok(Some(known.to_owned()))
 }

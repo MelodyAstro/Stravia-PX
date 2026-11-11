@@ -2,6 +2,7 @@
 //! configuration snapshots; publishing an update only affects later requests.
 mod adapters;
 mod manager;
+mod model_mapping;
 mod schema;
 
 pub(crate) use adapters::{PluginSnapshot, mcp_tools, snapshot_hooks, snapshot_tools};
