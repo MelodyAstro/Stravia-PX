@@ -23,18 +23,30 @@ impl ShapeRegistry {
             shape.source = None;
             let tls = &mut shape.tls;
             if profile.min_version.is_some() || profile.max_version.is_some() {
-                tls.versions = ["1.2", "1.3"].into_iter().filter(|version| {
-                    *version >= profile.min_version.as_deref().unwrap_or("1.2")
-                        && *version <= profile.max_version.as_deref().unwrap_or("1.3")
-                }).map(str::to_owned).collect();
+                tls.versions = ["1.2", "1.3"]
+                    .into_iter()
+                    .filter(|version| {
+                        *version >= profile.min_version.as_deref().unwrap_or("1.2")
+                            && *version <= profile.max_version.as_deref().unwrap_or("1.3")
+                    })
+                    .map(str::to_owned)
+                    .collect();
             }
             if !profile.cipher_suites.is_empty() {
-                tls.cipher_suites = profile.cipher_suites.iter().map(|name| {
-                    crypto.cipher_suites.iter()
-                        .find(|suite| format!("{:?}", suite.suite()) == *name)
-                        .map(|suite| format!("0x{:04x}", u16::from(suite.suite())))
-                        .ok_or_else(|| ShapeError::field("cipher_suites", "configured cipher unavailable"))
-                }).collect::<Result<_, _>>()?;
+                tls.cipher_suites = profile
+                    .cipher_suites
+                    .iter()
+                    .map(|name| {
+                        crypto
+                            .cipher_suites
+                            .iter()
+                            .find(|suite| format!("{:?}", suite.suite()) == *name)
+                            .map(|suite| format!("0x{:04x}", u16::from(suite.suite())))
+                            .ok_or_else(|| {
+                                ShapeError::field("cipher_suites", "configured cipher unavailable")
+                            })
+                    })
+                    .collect::<Result<_, _>>()?;
                 tls.advertise_only_cipher_suites.clear();
             }
             if !profile.key_exchange_groups.is_empty() {
@@ -46,7 +58,10 @@ impl ShapeRegistry {
                 tls.key_shares.clear();
             }
             let identity = format!("{}:provider:{}", original.identity, fingerprint);
-            shapes.insert(name.clone(), Arc::new(Self::compile(&shape, identity, &self.verifier)?));
+            shapes.insert(
+                name.clone(),
+                Arc::new(Self::compile(&shape, identity, &self.verifier)?),
+            );
         }
         let registry = Arc::new(Self {
             shapes,
@@ -55,7 +70,9 @@ impl ShapeRegistry {
             verifier: Arc::clone(&self.verifier),
         });
         // Bound session/config residency independently of the number of edits.
-        if cache.len() == 4 { cache.remove(0); }
+        if cache.len() == 4 {
+            cache.remove(0);
+        }
         cache.push((profile.clone(), Arc::clone(&registry)));
         Ok(registry)
     }

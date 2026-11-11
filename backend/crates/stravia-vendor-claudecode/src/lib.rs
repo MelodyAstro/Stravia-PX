@@ -29,10 +29,10 @@ use stravia_vendor_sdk::VendorGuest;
 use stravia_vendor_sdk::net::{Coding, Fields, Options, Request};
 use stravia_vendor_sdk::{
     AuthCallback, AuthCallbackPort, AuthDescriptor, AuthFlow, AuthManualInput, AuthManualInputType,
-    CANONICAL_FORMAT_VERSION, Capability, ChannelDescriptor, ConfigField, ConfigFieldKind,
-    ConfigGroup, DataCompatibility, DiscoverRequest, DiscoverResponse, ErrorKind, GuestHost,
-    NetworkDeclaration, Operation, OperationInput, OperationOutput, OriginDeclaration, PluginError,
-    ProviderDescriptor, ProviderSnapshot, VendorDescriptor, VendorKind, read_http_body,
+    CANONICAL_FORMAT_VERSION, Capability, ChannelDescriptor, ConfigGroup, DataCompatibility,
+    DiscoverRequest, DiscoverResponse, ErrorKind, GuestHost, NetworkDeclaration, Operation,
+    OperationInput, OperationOutput, OriginDeclaration, PluginError, ProviderDescriptor,
+    ProviderSnapshot, VendorDescriptor, VendorKind, read_http_body,
 };
 
 fn tools_used_header(names: &[String], truncated: bool) -> Result<String, PluginError> {

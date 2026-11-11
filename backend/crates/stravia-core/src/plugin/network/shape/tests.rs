@@ -16,12 +16,20 @@ fn provider_profile_controls_https_and_wss_and_isolates_sessions() {
             "tls_min_version":"1.3",
             "tls_cipher_suites":"TLS13_CHACHA20_POLY1305_SHA256,TLS13_AES_128_GCM_SHA256",
             "tls_key_exchange_groups":"X25519,secp256r1"
-        })).unwrap(),
-    ).unwrap();
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let configured = registry.with_transport_profile(&profile).unwrap();
     let reused = registry.with_transport_profile(&profile).unwrap();
     assert!(Arc::ptr_eq(&configured, &reused));
-    for name in ["default", "codex-http", "codex-ws", "antigravity", "claude-code"] {
+    for name in [
+        "default",
+        "codex-http",
+        "codex-ws",
+        "antigravity",
+        "claude-code",
+    ] {
         let original = registry.get(name).unwrap();
         let shape = configured.get(name).unwrap();
         assert_ne!(original.identity, shape.identity);
@@ -29,10 +37,18 @@ fn provider_profile_controls_https_and_wss_and_isolates_sessions() {
             let hello = capture(shape.tls_for("direct", websocket));
             assert_eq!(&hello.suites[..2], &[0x1303, 0x1301]);
             assert_eq!(u16_list(extension(&hello, 10))[0], 29);
-            assert!(!Arc::ptr_eq(&shape.tls_for("direct", websocket), &original.tls_for("direct", websocket)));
+            assert!(!Arc::ptr_eq(
+                &shape.tls_for("direct", websocket),
+                &original.tls_for("direct", websocket)
+            ));
         }
     }
-    assert!(Arc::ptr_eq(&registry, &registry.with_transport_profile(&Default::default()).unwrap()));
+    assert!(Arc::ptr_eq(
+        &registry,
+        &registry
+            .with_transport_profile(&Default::default())
+            .unwrap()
+    ));
 }
 
 fn u16_at(input: &[u8], offset: usize) -> usize {

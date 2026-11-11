@@ -91,14 +91,33 @@ jobs:
       # Reuse the exact backend-source cache verified by Platform Plugins.
       # Cargo still validates the feature/profile graph before reusing outputs.
       - name: Cache platform workspace compilation
+        id: workspace-cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: px-platform-workspace-v1-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'backend/**', 'patches/**', 'frontend/stravia-webui/src/assets/icons/*.svg') }}
+          shared-key: strinova-platform-workspace-v065
           cache-targets: 'true'
           cache-all-crates: 'true'
           cache-workspace-crates: 'true'
           cache-on-failure: 'true'
           cache-bin: 'true'
+
+      - name: Seed v0.6.5 workspace from its verified initial build
+        if: steps.workspace-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v5
+        with:
+          key: v0-rust-px-platform-workspace-v1-436f79b14ebb16809ce378bcef97e523b74c34be5bda76bec9d1e4cb5622ae62-Linux-x64-fb0798e1-f6e0142e
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            ~/.cargo/git/db
+            target
+
+      - name: Restore pinned compiled patch manager
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.cargo/bin/cargo-patch-crate
+          key: patch-crate-0.1.13-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1
 
       - name: Set up pinned Bun
         uses: oven-sh/setup-bun@v2

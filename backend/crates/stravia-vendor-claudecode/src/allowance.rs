@@ -77,12 +77,12 @@ pub(crate) fn connection_check(
 
 fn usage_request(provider: &ProviderSnapshot, access_token: &str) -> Request {
     let mut headers = vec![
-            ("accept".into(), "application/json, text/plain, */*".into()),
-            ("anthropic-beta".into(), USAGE_BETAS.into()),
-            ("content-type".into(), "application/json".into()),
-            ("user-agent".into(), cli_user_agent(DEFAULT_CLIENT_VERSION)),
-            ("authorization".into(), format!("Bearer {access_token}")),
-        ];
+        ("accept".into(), "application/json, text/plain, */*".into()),
+        ("anthropic-beta".into(), USAGE_BETAS.into()),
+        ("content-type".into(), "application/json".into()),
+        ("user-agent".into(), cli_user_agent(DEFAULT_CLIENT_VERSION)),
+        ("authorization".into(), format!("Bearer {access_token}")),
+    ];
     stravia_vendor_common::identity::apply_claude(provider, &mut headers, DEFAULT_CLIENT_VERSION);
     crate::net_request("GET", USAGE_URL, headers, Vec::new())
 }
@@ -125,16 +125,25 @@ fn validate_usage(value: &Value) -> Result<(), PluginError> {
 
 /// 取规范化订阅标识（见 `profile_plan`）。profile 接口只用于展示与计费建议，
 /// 失败或无 `user:profile` 权限时降级为 `None`，不让一次附加请求拖垮额度刷新。
-fn fetch_profile_plan(host: &GuestHost, provider: &ProviderSnapshot, access_token: &str) -> Option<String> {
+fn fetch_profile_plan(
+    host: &GuestHost,
+    provider: &ProviderSnapshot,
+    access_token: &str,
+) -> Option<String> {
     let mut headers = vec![
-                    ("accept".into(), "application/json, text/plain, */*".into()),
-                    ("anthropic-beta".into(), "oauth-2025-04-20".into()),
-                    ("content-type".into(), "application/json".into()),
-                    ("user-agent".into(), cli_user_agent(DEFAULT_CLIENT_VERSION)),
-                    ("authorization".into(), format!("Bearer {access_token}")),
-                ];
+        ("accept".into(), "application/json, text/plain, */*".into()),
+        ("anthropic-beta".into(), "oauth-2025-04-20".into()),
+        ("content-type".into(), "application/json".into()),
+        ("user-agent".into(), cli_user_agent(DEFAULT_CLIENT_VERSION)),
+        ("authorization".into(), format!("Bearer {access_token}")),
+    ];
     stravia_vendor_common::identity::apply_claude(provider, &mut headers, DEFAULT_CLIENT_VERSION);
-    let response = host.http_start(crate::net_request("GET", PROFILE_URL, headers, Vec::new()), &crate::net_options()).ok()?;
+    let response = host
+        .http_start(
+            crate::net_request("GET", PROFILE_URL, headers, Vec::new()),
+            &crate::net_options(),
+        )
+        .ok()?;
     if !(200..300).contains(&response.status().ok()?) {
         return None;
     }
