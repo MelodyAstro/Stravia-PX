@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { prepareApp } from './prepare-app'
+import { readFile } from 'node:fs/promises'
 
 test('previews OAuth imports, skips duplicates and requires explicit confirmation', async ({ page }) => {
   await prepareApp(page)
@@ -74,4 +75,60 @@ test('Google RT import accepts a JSON file and invalidates preview on edits', as
   expect(previewKind).toBe('antigravity')
   await dialog.getByLabel('Or paste JSON / Google refresh token').fill('changed-fixture-rt')
   await expect(dialog.getByRole('button', { name: 'Confirm selected imports' })).toBeDisabled()
+})
+
+test('RT backup downloads credentials only after confirmation', async ({ page }) => {
+  await prepareApp(page)
+  let exports = 0
+  await page.route('**/api/v1/providers', (route) =>
+    route.fulfill({
+      json: {
+        data: [
+          {
+            id: 'google-fixture',
+            name: 'Google fixture',
+            vendor: 'antigravity',
+            channel: 'oauth',
+            protocol: 'google-gemini-generate-content-v1beta',
+            base_url: 'https://fixture.invalid',
+            is_enabled: true,
+            use_proxy: false,
+            credential_status: 'valid',
+            oauth_status: 'connected',
+            configured_credential_fields: [],
+            allowance_suspension: null,
+            cost_plan: null,
+            created_at: '2026-11-11T00:00:00Z',
+            updated_at: '2026-11-11T00:00:00Z',
+          },
+        ],
+      },
+    }),
+  )
+  await page.route('**/api/v1/providers/google-fixture/rt-backup', (route) => {
+    expect(route.request().postDataJSON()).toEqual({ confirmed: true })
+    exports++
+    return route.fulfill({ json: { data: { type: 'antigravity', refresh_token: 'fixture-backup-rt' } } })
+  })
+  await page.goto('/providers')
+  const openBackup = async () => {
+    await page.getByRole('button', { name: 'More actions for Google fixture' }).first().click()
+    await page.getByRole('menuitem', { name: 'Back up RT JSON' }).click()
+  }
+  await openBackup()
+  const confirmation = page.getByRole('alertdialog')
+  await expect(confirmation).toContainText('contains a refresh token')
+  expect(exports).toBe(0)
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(exports).toBe(0)
+  await openBackup()
+  const downloaded = page.waitForEvent('download')
+  await confirmation.getByRole('button', { name: 'Download RT JSON' }).click()
+  const file = await downloaded
+  expect(file.suggestedFilename()).toBe('antigravity-rt.json')
+  expect(JSON.parse(await readFile((await file.path())!, 'utf8'))).toEqual({
+    type: 'antigravity',
+    refresh_token: 'fixture-backup-rt',
+  })
+  expect(exports).toBe(1)
 })
