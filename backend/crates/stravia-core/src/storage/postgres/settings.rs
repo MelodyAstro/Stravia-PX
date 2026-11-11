@@ -7,6 +7,28 @@ pub(super) struct PostgresSettingsStore {
 
 #[async_trait]
 impl SettingsStore for PostgresSettingsStore {
+    async fn compare_exchange(
+        &self,
+        key: &str,
+        expected: Option<&str>,
+        next: &str,
+    ) -> anyhow::Result<bool> {
+        let affected = if let Some(previous) = expected {
+            sqlx::query("UPDATE settings SET value=$1, updated_at=CURRENT_TIMESTAMP WHERE name=$2 AND value=$3")
+                .bind(next).bind(key).bind(previous).execute(&self.pool).await?.rows_affected()
+        } else {
+            sqlx::query(
+                "INSERT INTO settings(name,value) VALUES ($1,$2) ON CONFLICT(name) DO NOTHING",
+            )
+            .bind(key)
+            .bind(next)
+            .execute(&self.pool)
+            .await?
+            .rows_affected()
+        };
+        Ok(affected == 1)
+    }
+
     async fn get_or_insert(&self, key: &str, value: &str) -> anyhow::Result<String> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(

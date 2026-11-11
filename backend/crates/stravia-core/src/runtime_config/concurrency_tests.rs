@@ -30,6 +30,17 @@ impl ControlledStorage {
 
 #[async_trait]
 impl SettingsStore for ControlledStorage {
+    async fn compare_exchange(
+        &self,
+        key: &str,
+        expected: Option<&str>,
+        next: &str,
+    ) -> anyhow::Result<bool> {
+        self.source
+            .settings()
+            .compare_exchange(key, expected, next)
+            .await
+    }
     async fn get_or_insert(&self, key: &str, value: &str) -> anyhow::Result<String> {
         self.source.settings().get_or_insert(key, value).await
     }

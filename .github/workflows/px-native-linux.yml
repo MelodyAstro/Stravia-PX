@@ -41,6 +41,26 @@ jobs:
     name: Test and build native GNU package
     runs-on: ubuntu-22.04
     timeout-minutes: 120
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strinova_test
+          POSTGRES_PASSWORD: isolated_ci_fixture
+          POSTGRES_DB: strinova_test
+        ports: ['5432/tcp']
+        options: >-
+          --health-cmd "pg_isready -U strinova_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:8-alpine
+        ports: ['6379/tcp']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DB_URL: postgresql://strinova_test:isolated_ci_fixture@127.0.0.1:${{ job.services.postgres.ports[5432] }}/strinova_test
+      STRAVIA_TEST_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports[6379] }}/0
     steps:
       - name: Reserve space for workspace cache archives
         shell: bash
@@ -211,8 +231,10 @@ jobs:
           set -euo pipefail
           cargo test --locked --release -p stravia-vendor-sdk --lib
           cargo test --locked --release -p stravia-vendor-common --lib identity::tests
+          cargo test --locked --release -p stravia-vendor-common --lib reset_inventory::tests
           cargo test --locked --release -p stravia-vendor-codex -p stravia-vendor-claudecode --lib
           STRAVIA_CLAUDECODE_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm" cargo test --locked --release -p stravia-vendor-claudecode --test contract official_identity_sync -- --ignored
+          STRAVIA_CLAUDECODE_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm" STRAVIA_CODEX_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_codex.wasm" cargo test --locked --release -p stravia-vendor-claudecode --test contract account_reset -- --ignored
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib plugin::network::shape -- --test-threads=1
 
       - name: Verify Core plugin lifecycle and compatibility regressions
@@ -223,10 +245,31 @@ jobs:
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib custom_tool -- --test-threads=1
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib request_models -- --test-threads=1
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib platform_plugins -- --test-threads=1
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib account_usage -- --test-threads=1
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib account_usage_postgres -- --ignored --test-threads=1
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib account_spend_limit -- --test-threads=1
 
       - name: Verify authenticated platform plugin management
         if: inputs.tools_only != true
         run: cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-server --no-default-features --lib platform_plugins -- --test-threads=1
+
+      - name: Verify authenticated account controls
+        if: inputs.tools_only != true
+        run: cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-server --no-default-features --lib account_controls -- --test-threads=1
+
+      - name: Set up cached Python test dependencies
+        if: inputs.tools_only != true
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Verify real SQLite and PostgreSQL upgrades over HTTP
+        if: inputs.tools_only != true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-server --no-default-features --features test-harness --bin stravia-server --bin stravia-storage-test-harness
+          STRAVIA_BINARY="$PWD/target/release/stravia-server" STRAVIA_STORAGE_HARNESS_BINARY="$PWD/target/release/stravia-storage-test-harness" uv run --locked --group test python -m pytest tests/e2e/storage/test_shared_content_upgrade.py -q --durations=0
 
       - name: Build optimized native server
         if: inputs.tools_only != true

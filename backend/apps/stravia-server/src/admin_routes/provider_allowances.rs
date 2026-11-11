@@ -148,6 +148,43 @@ pub(super) async fn provider_reset_state(
     }
 }
 
+pub(super) async fn get_account_budget(
+    State(gateway): State<Gateway>,
+    Path(provider_id): Path<String>,
+) -> impl IntoResponse {
+    match gateway.admin().account_budget(&provider_id).await {
+        Ok(view) => Json(serde_json::json!({"data":view})).into_response(),
+        Err(error) => (
+            StatusCode::CONFLICT,
+            Json(
+                serde_json::json!({"code":"ACCOUNT_BUDGET_UNAVAILABLE","error":error.to_string()}),
+            ),
+        )
+            .into_response(),
+    }
+}
+
+pub(super) async fn set_account_budget(
+    State(gateway): State<Gateway>,
+    Path(provider_id): Path<String>,
+    Json(input): Json<stravia_core::account_usage::AccountBudgetInput>,
+) -> impl IntoResponse {
+    match gateway
+        .admin()
+        .set_account_budget(&provider_id, input)
+        .await
+    {
+        Ok(view) => Json(serde_json::json!({"data":view})).into_response(),
+        Err(error) => (
+            StatusCode::CONFLICT,
+            Json(
+                serde_json::json!({"code":"ACCOUNT_BUDGET_SAVE_FAILED","error":error.to_string()}),
+            ),
+        )
+            .into_response(),
+    }
+}
+
 pub(super) async fn redeem_provider_reset(
     State(gateway): State<Gateway>,
     Path(provider_id): Path<String>,

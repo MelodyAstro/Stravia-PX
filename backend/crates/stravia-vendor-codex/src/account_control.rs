@@ -18,7 +18,18 @@ pub(crate) fn execute(
             "A stable reset request UUID is required",
         )
     })?;
-    let mut receipt = stravia_vendor_common::account_action::Receipt::open(&request_id)?;
+    let binding = provider
+        .credentials
+        .get("account_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            plugin_error(
+                stravia_vendor_sdk::ErrorKind::Invalid,
+                "Codex account identity is unavailable",
+            )
+        })?;
+    let mut receipt = stravia_vendor_common::account_action::Receipt::open(&request_id, binding)?;
     if let Some(code) = receipt.result.clone() {
         return Ok(result(code, request_id));
     }

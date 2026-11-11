@@ -919,6 +919,26 @@ impl RouteStore for MemoryStorage {
 
 #[async_trait]
 impl SettingsStore for MemoryStorage {
+    async fn compare_exchange(
+        &self,
+        key: &str,
+        expected: Option<&str>,
+        next: &str,
+    ) -> anyhow::Result<bool> {
+        let mut values = self.settings.write().await;
+        if let Some((_, value)) = values.iter_mut().find(|(name, _)| name == key) {
+            if Some(value.as_str()) != expected {
+                return Ok(false);
+            }
+            *value = next.into();
+        } else {
+            if expected.is_some() {
+                return Ok(false);
+            }
+            values.push((key.into(), next.into()));
+        }
+        Ok(true)
+    }
     async fn get_or_insert(&self, key: &str, value: &str) -> anyhow::Result<String> {
         let mut settings = self.settings.write().await;
         if let Some((_, existing)) = settings.iter().find(|(name, _)| name == key) {

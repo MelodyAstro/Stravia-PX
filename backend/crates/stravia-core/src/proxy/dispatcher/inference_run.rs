@@ -1225,6 +1225,7 @@ async fn execute_observed(
             let code = match diagnostic.code.as_deref() {
                 Some("allowance_suspended") => "allowance_suspended",
                 Some("STRAVIA_SPEND_LIMIT" | "spend_limit") => "api_key_spend_limit_reached",
+                Some("account_spend_limit") => "account_spend_limit",
                 _ => return None,
             };
             Some(match ingress.protocol {

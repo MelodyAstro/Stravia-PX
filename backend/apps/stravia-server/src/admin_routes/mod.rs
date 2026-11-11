@@ -35,8 +35,9 @@ mod platform_plugins_tests;
 mod provider_allowances;
 use connect_clients::preview_connect_client_handler;
 use provider_allowances::{
-    get_provider_allowance, list_provider_allowances, provider_reset_state, redeem_provider_reset,
-    refresh_provider_allowance, replace_provider_allowance_guards,
+    get_account_budget, get_provider_allowance, list_provider_allowances, provider_reset_state,
+    redeem_provider_reset, refresh_provider_allowance, replace_provider_allowance_guards,
+    set_account_budget,
 };
 
 #[cfg(test)]
@@ -348,6 +349,10 @@ fn create_router_inner(gateway: Gateway, auth: Option<AdminHttpState>) -> Router
         .route("/performance/export", get(performance::export))
         .route("/provider-allowances", get(list_provider_allowances))
         .route(
+            "/provider-allowances/{provider_id}/budget",
+            get(get_account_budget).put(set_account_budget),
+        )
+        .route(
             "/provider-allowances/{provider_id}/reset",
             get(provider_reset_state).post(redeem_provider_reset),
         )
@@ -453,5 +458,7 @@ use status::*;
 use updates::*;
 use web::*;
 
+#[cfg(test)]
+mod account_controls_tests;
 #[cfg(test)]
 mod tests;

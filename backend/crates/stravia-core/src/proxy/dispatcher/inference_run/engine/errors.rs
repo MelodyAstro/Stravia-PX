@@ -184,7 +184,9 @@ pub(super) fn model_turn_error_status(
         "model_unavailable" | "provider_unavailable" | "target_ineligible" => {
             StatusCode::SERVICE_UNAVAILABLE
         }
-        "target_rpm_exceeded" | "allowance_suspended" => StatusCode::TOO_MANY_REQUESTS,
+        "target_rpm_exceeded" | "allowance_suspended" | "account_spend_limit" => {
+            StatusCode::TOO_MANY_REQUESTS
+        }
         "target_rpm_queue_full" => StatusCode::SERVICE_UNAVAILABLE,
         "input_modality_unsupported"
         | "compaction_unsupported"
@@ -294,6 +296,29 @@ pub(super) fn model_turn_execute_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn account_spend_limit_is_a_local_429_without_retry_after() {
+        let error = stravia_runtime_contract::model_turn::ModelTurnError::new(
+            "account_spend_limit",
+            "Site account spend estimate prevents this request",
+        );
+        let response = model_turn_error_response(error);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(!response.headers().contains_key("retry-after"));
+        assert!(
+            response
+                .extensions()
+                .get::<crate::model_turn::UpstreamErrorResponse>()
+                .is_none()
+        );
+        let diagnostic = response
+            .extensions()
+            .get::<crate::interaction_observation::FailureDiagnostic>()
+            .unwrap();
+        assert_eq!(diagnostic.source.as_deref(), Some("platform"));
+        assert_eq!(diagnostic.code.as_deref(), Some("account_spend_limit"));
+    }
 
     #[tokio::test]
     async fn attachment_model_turn_storage_error_is_platform_500_without_internal_detail() {

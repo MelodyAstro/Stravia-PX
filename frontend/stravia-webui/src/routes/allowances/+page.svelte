@@ -57,6 +57,7 @@ import * as Table from '#lib/components/ui/table/index.js'
 import * as Tabs from '#lib/components/ui/tabs/index.js'
 import * as Tooltip from '#lib/components/ui/tooltip/index.js'
 import AccountResetControl from '#lib/components/account-reset-control.svelte'
+import AccountBudgetControl from '#lib/components/account-budget-control.svelte'
 import AllowanceSuspension from '#lib/components/allowance-suspension.svelte'
 import { cn } from '#lib/utils.js'
 
@@ -388,6 +389,8 @@ function allowanceLabel(allowance: Allowance): string {
     return m.allowances_label_balance()
   }
   switch (allowance.key) {
+    case 'reset_credits':
+      return m.allowances_label_resets()
     case '5h':
     case 'five_hour':
       return m.allowances_label_five_hour()
@@ -598,16 +601,18 @@ function allowanceErrorMessage(category: ProviderAllowanceErrorCategory): string
 {/snippet}
 
 {#snippet guardControl(provider: VisibleProvider, snapshot: ProviderAllowanceSnapshot, allowance: Allowance)}
-  <Switch
-    bind:checked={
-      () => allowance.guarded,
-      (checked: boolean) => {
-        void reading.setGuard(snapshot.provider_id, allowance.key, checked)
+  {#if allowance.key !== 'reset_credits'}
+    <Switch
+      bind:checked={
+        () => allowance.guarded,
+        (checked: boolean) => {
+          void reading.setGuard(snapshot.provider_id, allowance.key, checked)
+        }
       }
-    }
-    disabled={!provider.canSaveGuards}
-    aria-busy={provider.savingGuards}
-    aria-label={m.allowances_guard_item({ item: allowanceLabel(allowance) })} />
+      disabled={!provider.canSaveGuards}
+      aria-busy={provider.savingGuards}
+      aria-label={m.allowances_guard_item({ item: allowanceLabel(allowance) })} />
+  {/if}
 {/snippet}
 
 {#snippet allowanceDetailTable(provider: VisibleProvider)}
@@ -759,8 +764,12 @@ function allowanceErrorMessage(category: ProviderAllowanceErrorCategory): string
               {/if}
             </div>
           {/if}
-          {#if snapshot && ["openai-codex", "claude-code"].includes(snapshot.catalog_provider_id)}
-            <AccountResetControl {providerId} available={provider.allowances.find((item) => item.key === "reset_credits")?.remaining?.value ?? null} onrefresh={() => void reading.refreshProvider(providerId)} />
+          {#if snapshot && ['openai-codex', 'claude-code'].includes(snapshot.catalog_provider_id)}
+            <AccountResetControl
+              {providerId}
+              available={provider.allowances.find((item) => item.key === 'reset_credits')?.remaining?.value ?? null}
+              onrefresh={() => void reading.refreshProvider(providerId)} />
+            <AccountBudgetControl {providerId} />
           {/if}
           {#if provider.allowances.length > 0}
             {@render allowanceDetailTable(provider)}

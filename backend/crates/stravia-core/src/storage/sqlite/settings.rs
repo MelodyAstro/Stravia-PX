@@ -7,6 +7,37 @@ pub(super) struct SqliteSettingsStore {
 
 #[async_trait]
 impl SettingsStore for SqliteSettingsStore {
+    async fn compare_exchange(
+        &self,
+        key: &str,
+        expected: Option<&str>,
+        next: &str,
+    ) -> anyhow::Result<bool> {
+        let mut connection = self.pool.acquire_write().await?;
+        let affected = if let Some(previous) = expected {
+            sqlx::query(
+                "UPDATE settings SET value=?, updated_at=datetime('now') WHERE name=? AND value=?",
+            )
+            .bind(next)
+            .bind(key)
+            .bind(previous)
+            .execute(&mut *connection)
+            .await?
+            .rows_affected()
+        } else {
+            sqlx::query(
+                "INSERT INTO settings(name,value) VALUES (?,?) ON CONFLICT(name) DO NOTHING",
+            )
+            .bind(key)
+            .bind(next)
+            .execute(&mut *connection)
+            .await?
+            .rows_affected()
+        };
+        connection.finish().await?;
+        Ok(affected == 1)
+    }
+
     async fn get_or_insert(&self, key: &str, value: &str) -> anyhow::Result<String> {
         let mut connection = self.pool.acquire_write().await?;
         sqlx::query(

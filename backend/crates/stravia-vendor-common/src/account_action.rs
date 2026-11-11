@@ -12,10 +12,11 @@ pub struct Receipt {
     pub request_id: String,
     pub target: Option<String>,
     pub result: Option<String>,
+    binding: String,
 }
 
 impl Receipt {
-    pub fn open(request_id: &str) -> Result<Self, PluginError> {
+    pub fn open(request_id: &str, binding: &str) -> Result<Self, PluginError> {
         let cell = state::open(Scope::Provider, "strinova.manual-reset.v1")?;
         let snapshot = cell.load()?;
         let stored: Value = snapshot
@@ -34,6 +35,14 @@ impl Receipt {
             ));
         }
         let same = stored["request_id"].as_str() == Some(request_id);
+        if !stored.is_null()
+            && stored["binding"].as_str() != Some(binding)
+            && (same || stored["result"].is_null())
+        {
+            return Err(invalid(
+                "The account changed while a reset outcome was unresolved",
+            ));
+        }
         Ok(Self {
             cell,
             revision: snapshot.revision,
@@ -44,6 +53,7 @@ impl Receipt {
             result: same
                 .then(|| stored["result"].as_str().map(str::to_owned))
                 .flatten(),
+            binding: binding.into(),
         })
     }
     pub fn record_target(&mut self, target: Option<String>) -> Result<(), PluginError> {
@@ -56,11 +66,14 @@ impl Receipt {
     }
     fn save(&mut self) -> Result<(), PluginError> {
         let data = serde_json::to_vec(
-            &json!({"request_id":self.request_id,"target":self.target,"result":self.result}),
+            &json!({"request_id":self.request_id,"target":self.target,"result":self.result,"binding":self.binding}),
         )
         .map_err(|_| invalid("Reset receipt cannot be encoded"))?;
         self.cell.compare_exchange(self.revision, Some(&data))?;
-        self.revision = self.cell.load()?.revision;
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| invalid("Reset receipt revision overflow"))?;
         Ok(())
     }
 }

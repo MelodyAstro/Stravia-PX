@@ -1,4 +1,16 @@
 import type { StatsFilter, StatsWindow } from '#lib/types/stats.js'
+export interface AccountBudgetView {
+  unit: string
+  limit: string | null
+  spent: string
+  reserved: string
+  uncertain_spend: string
+  pending: number
+  revision: number
+  since: string | null
+  estimated: boolean
+  rate_date: string
+}
 import type { RequestModelConfig, RequestModelsView } from '#lib/types/api-key.js'
 import { apiBase, authenticatedFetch, decodeAdmin, isTauri } from '#lib/auth.js'
 import type { ConnectClientApplyPlan } from '#lib/connect-client-apply.js'
@@ -468,8 +480,24 @@ export const admin = {
     apiKeys: (window?: StatsWindow) => request<ApiKeyStats[]>('GET', statsPath('/stats/api-keys', window)),
   },
   allowances: {
-    resetState: (providerId: string) => request<{request_id: string | null; result: string | null; pending: boolean}>("GET", `/provider-allowances/${encodeURIComponent(providerId)}/reset`),
-    redeemReset: (providerId: string, requestId: string) => request<{request_id:string;code:string}>("POST", `/provider-allowances/${encodeURIComponent(providerId)}/reset`, {request_id:requestId,confirmed:true}),
+    budget: (providerId: string) =>
+      request<AccountBudgetView>('GET', `/provider-allowances/${encodeURIComponent(providerId)}/budget`),
+    saveBudget: (providerId: string, limit: string | null, expectedRevision: number) =>
+      request<AccountBudgetView>('PUT', `/provider-allowances/${encodeURIComponent(providerId)}/budget`, {
+        limit,
+        expected_revision: expectedRevision,
+      }),
+    resetState: (providerId: string) =>
+      request<{ request_id: string | null; result: string | null; pending: boolean }>(
+        'GET',
+        `/provider-allowances/${encodeURIComponent(providerId)}/reset`,
+      ),
+    redeemReset: (providerId: string, requestId: string) =>
+      request<{ request_id: string; code: string }>(
+        'POST',
+        `/provider-allowances/${encodeURIComponent(providerId)}/reset`,
+        { request_id: requestId, confirmed: true },
+      ),
     list: () => request<ProviderAllowanceTarget[]>('GET', '/provider-allowances'),
     get: (providerId: string) =>
       request<ProviderAllowanceSnapshot>('GET', `/provider-allowances/${encodeURIComponent(providerId)}`),

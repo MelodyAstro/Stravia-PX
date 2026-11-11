@@ -38,9 +38,18 @@ pub(crate) fn execute(
         usage_request(provider, access_token, true),
         &crate::net_options(),
     )?;
-    let status = response.status()?;
-    let headers = response.headers()?;
-    let body = read_http_body(&response, MAX_USAGE_BODY)?;
+    let mut status = response.status()?;
+    let mut headers = response.headers()?;
+    let mut body = read_http_body(&response, MAX_USAGE_BODY)?;
+    if inventory_query_rejected(status, &body) {
+        let fallback = host.http_start(
+            usage_request(provider, access_token, false),
+            &crate::net_options(),
+        )?;
+        status = fallback.status()?;
+        headers = fallback.headers()?;
+        body = read_http_body(&fallback, MAX_USAGE_BODY)?;
+    }
     if !(200..300).contains(&status) {
         return Err(common::upstream_error(status, &headers, &body));
     }
@@ -59,6 +68,24 @@ pub(crate) fn execute(
     response.account_label =
         first_account_label([provider.credentials.get("email").and_then(Value::as_str)]);
     Ok(response)
+}
+
+// Retry only an explicit rejection of this optional query parameter. Auth,
+// scope, Cloudflare and rate-limit failures retain their original evidence.
+fn inventory_query_rejected(status: u16, body: &[u8]) -> bool {
+    if !matches!(status, 400 | 403) {
+        return false;
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let error = &value["error"];
+    matches!(
+        error["type"].as_str(),
+        Some("invalid_request_error" | "invalid_query_parameter")
+    ) && error["message"]
+        .as_str()
+        .is_some_and(|message| message.to_ascii_lowercase().contains("cedar_ember"))
 }
 
 /// 固定 Anthropic 账号 usage 端点只验证 OAuth 凭据；它不请求配置的 Base URL，
@@ -121,7 +148,13 @@ fn validate_usage(value: &Value) -> Result<(), PluginError> {
             ));
         }
     }
-    for field in ["five_hour", "seven_day", "spend"] {
+    for field in [
+        "five_hour",
+        "seven_day",
+        "spend",
+        "extra_usage",
+        "cedar_ember",
+    ] {
         if let Some(window) = object.get(field).filter(|value| !value.is_null()) {
             recognized = true;
             if !window.is_object() {
@@ -341,6 +374,10 @@ fn parse(payload: &Value) -> Option<AllowanceResponse> {
         && spend.get("enabled").and_then(Value::as_bool) == Some(true)
     {
         allowances.push(extra_usage(spend));
+    } else if let Some(extra) = object.get("extra_usage").and_then(Value::as_object)
+        && extra.get("is_enabled").and_then(Value::as_bool) == Some(true)
+    {
+        allowances.push(legacy_extra_usage(extra));
     }
     if let Some(inventory) = stravia_vendor_common::reset_inventory::claude(
         payload,
@@ -363,6 +400,34 @@ fn parse(payload: &Value) -> Option<AllowanceResponse> {
         // 计费建议要等 profile 判定订阅等级后才能填；usage 响应本身不含计费信息。
         billing: None,
     })
+}
+
+/// The legacy OAuth credit fields are currency minor units (cents), whereas
+/// the newer spend object carries an explicit amount and currency.
+fn legacy_extra_usage(extra: &Map<String, Value>) -> AllowanceItem {
+    let used = extra
+        .get("used_credits")
+        .and_then(number)
+        .filter(|n| *n >= 0.0)
+        .map(|n| n / 100.0);
+    let limit = extra
+        .get("monthly_limit")
+        .and_then(number)
+        .filter(|n| *n >= 0.0)
+        .map(|n| n / 100.0);
+    let currency = extra.get("currency").and_then(non_empty).unwrap_or("USD");
+    let money = |value| AllowanceAmount {
+        value: decimal(value),
+        unit: "currency".into(),
+        currency: Some(currency.into()),
+    };
+    let mut result = item("extra_usage", "Extra usage", "balance");
+    result.used = used.map(money);
+    result.limit = limit.map(money);
+    result.remaining = used.zip(limit).map(|(used, limit)| money(limit - used));
+    result.used_percent = extra.get("utilization").and_then(number).map(decimal);
+    result.condition = condition(&result);
+    result
 }
 
 fn window(
@@ -716,5 +781,34 @@ mod tests {
         assert!(validate_usage(&json!({"limits": {}})).is_err());
         assert!(validate_usage(&json!({"limits": [1]})).is_err());
         assert!(validate_usage(&json!({"five_hour": 1})).is_err());
+    }
+
+    #[test]
+    fn legacy_credit_amounts_are_cents_and_do_not_invent_a_prepaid_balance() {
+        let response=parse(&json!({"extra_usage":{"is_enabled":true,"used_credits":725,"monthly_limit":5000,"utilization":14.5}})).unwrap();
+        let item = &response.allowances[0];
+        assert_eq!(item.used.as_ref().unwrap().value, "7.25");
+        assert_eq!(item.limit.as_ref().unwrap().value, "50");
+        assert_eq!(item.remaining.as_ref().unwrap().value, "42.75");
+        assert_eq!(
+            item.remaining.as_ref().unwrap().currency.as_deref(),
+            Some("USD")
+        );
+        assert!(parse(&json!({"extra_usage":{"is_enabled":false}})).is_none());
+    }
+
+    #[test]
+    fn optional_inventory_query_fallback_never_hides_auth_scope_or_rate_limits() {
+        let body=serde_json::to_vec(&json!({"error":{"type":"invalid_request_error","message":"Unknown query: cedar_ember"}})).unwrap();
+        assert!(inventory_query_rejected(400, &body));
+        for status in [401, 429, 500] {
+            assert!(!inventory_query_rejected(status, &body));
+        }
+        let scope=serde_json::to_vec(&json!({"error":{"type":"permission_error","message":"user:profile scope required for cedar_ember"}})).unwrap();
+        assert!(!inventory_query_rejected(403, &scope));
+        assert!(!inventory_query_rejected(
+            403,
+            b"<html>Cloudflare challenge</html>"
+        ));
     }
 }

@@ -589,6 +589,13 @@ pub trait ProviderModelStore: Send + Sync {
 
 #[async_trait]
 pub trait SettingsStore: Send + Sync {
+    /// Atomic compare/exchange for a durable settings ledger.
+    async fn compare_exchange(
+        &self,
+        key: &str,
+        expected: Option<&str>,
+        next: &str,
+    ) -> anyhow::Result<bool>;
     async fn get(&self, key: &str) -> anyhow::Result<Option<String>>;
     async fn set(&self, key: &str, value: &str) -> anyhow::Result<()>;
     /// Atomically preserve an existing setting or insert and return the supplied value.

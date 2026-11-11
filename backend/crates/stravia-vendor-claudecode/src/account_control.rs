@@ -20,7 +20,8 @@ pub(crate) fn execute(
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("Claude organization is unavailable"))?;
     uuid::Uuid::parse_str(organization).map_err(|_| invalid("Claude organization is invalid"))?;
-    let mut receipt = stravia_vendor_common::account_action::Receipt::open(&request_id)?;
+    let mut receipt =
+        stravia_vendor_common::account_action::Receipt::open(&request_id, organization)?;
     if let Some(code) = receipt.result.clone() {
         return Ok(result(code, request_id));
     }
@@ -51,6 +52,12 @@ pub(crate) fn execute(
             })
             .ok_or_else(|| invalid("No reset is currently redeemable"))?;
         if reset["eligible"].as_bool() != Some(true)
+            || stravia_vendor_common::reset_inventory::claude(
+                &payload,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .and_then(|item| item.remaining)
+            .is_none_or(|remaining| remaining.value.parse::<u64>().unwrap_or(0) == 0)
             || !reset["grants"].as_array().is_some_and(|grants| {
                 grants.iter().any(|item| {
                     item["id"].as_str() == Some(grant)

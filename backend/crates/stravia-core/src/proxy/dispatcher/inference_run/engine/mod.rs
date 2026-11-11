@@ -107,7 +107,7 @@ fn reject_before_admission(
 ) -> Response {
     // Rejection rows carry the stable reason code. The already-rendered wire
     // body is replaced later by the protocol rewrite, which accepts this code.
-    if code == "spend_limit"
+    if matches!(code, "spend_limit" | "account_spend_limit")
         && let Some(mut diagnostic) = response
             .extensions()
             .get::<crate::interaction_observation::FailureDiagnostic>()

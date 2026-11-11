@@ -8,27 +8,50 @@ import { localizeBackendErrorMessage } from '#lib/backend-error.js'
 import { Button } from '#lib/components/ui/button/index.js'
 import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js'
 
-let { providerId, available, onrefresh }: { providerId: string; available: number | null; onrefresh: () => void } = $props()
+let { providerId, available, onrefresh }: { providerId: string; available: number | null; onrefresh: () => void } =
+  $props()
 let open = $state(false)
 let busy = $state(false)
 let requestId = $state<string | null>(null)
-const state = createQuery(() => ({ queryKey: ['account-reset-state', providerId], queryFn: () => admin.allowances.resetState(providerId) }))
+const resetQuery = createQuery(() => ({
+  queryKey: ['account-reset-state', providerId],
+  queryFn: () => admin.allowances.resetState(providerId),
+}))
+
+function resultLabel(code: string): string {
+  switch (code) {
+    case 'reset':
+      return m.account_reset_result_reset()
+    case 'already_redeemed':
+    case 'already_used':
+      return m.account_reset_result_already_used()
+    case 'nothing_to_reset':
+    case 'not_limited':
+      return m.account_reset_result_not_limited()
+    case 'no_credit':
+      return m.account_reset_result_no_credit()
+    case 'cooldown':
+      return m.account_reset_result_cooldown()
+    default:
+      return m.account_reset_result_unavailable()
+  }
+}
 
 async function redeem(): Promise<void> {
   if (busy) return
   busy = true
-  requestId = state.data?.pending ? state.data.request_id : requestId ?? createUuid()
+  requestId = resetQuery.data?.pending ? resetQuery.data.request_id : (requestId ?? createUuid())
   try {
     if (!requestId) throw new Error('Missing reset request identifier')
     const result = await admin.allowances.redeemReset(providerId, requestId)
-    toast.message(m.account_reset_done({ result: result.code }))
+    toast.message(m.account_reset_done({ result: resultLabel(result.code) }))
     requestId = null
-    await state.refetch()
+    await resetQuery.refetch()
     onrefresh()
     open = false
   } catch (error) {
     toast.error(localizeBackendErrorMessage(error))
-    await state.refetch()
+    await resetQuery.refetch()
   } finally {
     busy = false
   }
@@ -36,8 +59,17 @@ async function redeem(): Promise<void> {
 </script>
 
 <div class="flex flex-wrap items-center gap-2 py-2">
-  <Button type="button" variant="outline" size="sm" disabled={busy || state.isPending || state.isError || (!state.data?.pending && (available === null || available < 1))} onclick={() => open = true}>{m.account_reset_use()}</Button>
-  {#if state.data?.pending}<span class="text-xs text-muted-foreground" role="status">{m.account_reset_pending()}</span>
+  <Button
+    type="button"
+    variant="outline"
+    size="sm"
+    disabled={busy ||
+      resetQuery.isPending ||
+      resetQuery.isError ||
+      (!resetQuery.data?.pending && (available === null || available < 1))}
+    onclick={() => (open = true)}>{m.account_reset_use()}</Button>
+  {#if resetQuery.data?.pending}<span class="text-xs text-muted-foreground" role="status"
+      >{m.account_reset_pending()}</span>
   {:else if available === null}<span class="text-xs text-muted-foreground">{m.account_reset_unknown()}</span>{/if}
 </div>
 <AlertDialog.Root bind:open>

@@ -2788,6 +2788,17 @@ async fn finish_vendor_failure(
 }
 
 fn classify_vendor_error(error: anyhow::Error) -> AttemptFailure {
+    if error
+        .downcast_ref::<crate::account_usage::AccountSpendDenied>()
+        .is_some()
+    {
+        let mut failure = AttemptFailure::reroutable(
+            "account_spend_limit",
+            "The account site spend limit or estimate prevents this request",
+        );
+        failure.diagnostic.status_code = Some(429);
+        return failure;
+    }
     match error.downcast::<RuntimeError>() {
         Ok(error) => {
             if error.is_upstream_failure() {

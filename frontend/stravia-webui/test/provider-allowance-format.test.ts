@@ -9,6 +9,7 @@ describe('provider allowance values', () => {
   test('keeps the upstream unit and currency explicit', () => {
     expect(formatAllowanceAmount({ value: 1_250, unit: 'tokens' }, EN)).toBe('1,250 tokens')
     expect(formatAllowanceAmount({ value: 12, unit: 'requests' }, ZH)).toBe('12 次请求')
+    expect(formatAllowanceAmount({ value: 2, unit: 'resets' }, ZH)).toBe('2 次重置')
     expect(formatAllowanceAmount({ value: 12.5, unit: 'currency', currency: 'USD' }, ZH)).toBe('12.5 USD')
     expect(formatAllowanceAmount(undefined, EN)).toBe('–')
   })

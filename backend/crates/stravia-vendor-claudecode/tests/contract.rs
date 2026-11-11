@@ -31,6 +31,9 @@ const UPSTREAM: &str = "https://api.anthropic.com";
 const CHANNEL: &str = "oauth";
 const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-0000000000aa";
 
+#[path = "contract/account_controls.rs"]
+mod account_controls;
+
 fn artifact() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("STRAVIA_CLAUDECODE_WASM") {
         return path.into();
@@ -508,6 +511,7 @@ async fn run(
     services: &Arc<MockServices>,
     input: OperationInput,
 ) -> Result<OperationOutput, RuntimeError> {
+    let channel = input.provider().channel.clone();
     let scope = OperationScope::new(
         Arc::clone(services) as Arc<dyn HostServices>,
         CancellationToken::new(),
@@ -519,7 +523,7 @@ async fn run(
         .map_err(|_| RuntimeError::InvalidOutput)?;
     drop(input);
     runtime
-        .execute(plugin, CHANNEL, operation, encoded, scope)
+        .execute(plugin, &channel, operation, encoded, scope)
         .await
 }
 

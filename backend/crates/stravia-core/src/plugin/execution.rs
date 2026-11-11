@@ -777,7 +777,10 @@ impl Gateway {
         }
         let credential_version = prepared.credential_version;
         let oauth_connection_id = prepared.oauth_connection_id;
-        let mut execution = self
+        let budget = crate::account_usage::reserve(self, &prepared.provider, &request)
+            .await
+            .map_err(|error| error.context(crate::account_usage::AccountSpendDenied))?;
+        let execution = self
             .execute_vendor_input(
                 prepared.plugin,
                 prepared.operation,
@@ -790,7 +793,13 @@ impl Gateway {
                 request,
                 context,
             )
-            .await?;
+            .await;
+        if let Some(budget) = budget {
+            budget
+                .finish(execution.as_ref().ok().map(|execution| &execution.output))
+                .await?;
+        }
+        let mut execution = execution?;
         execution.credential_version = Some(credential_version);
         execution.oauth_connection_id = oauth_connection_id;
         Ok(execution)

@@ -31,19 +31,42 @@ pub struct ManualResetState {
     pub pending: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BoundReceipt {
+    #[serde(flatten)]
+    state: ManualResetState,
+    provider_id: String,
+    oauth_connection_id: Option<String>,
+}
+
+fn receipt_key(
+    prepared: &crate::plugin::execution::PreparedVendorExecution,
+) -> anyhow::Result<String> {
+    let (account, _) = crate::account_usage::account_key(prepared.provider())?;
+    Ok(format!("px_reset_receipt:{account}"))
+}
+
 impl AdminService {
     pub async fn provider_reset_state(&self, id: &str) -> anyhow::Result<ManualResetState> {
         self.get_provider(id).await?;
+        let context = VendorCallContext::new(
+            Default::default(),
+            stravia_runtime_contract::Deadline::fixed(Instant::now() + Duration::from_secs(45)),
+        );
+        let prepared = self
+            .gw
+            .prepare_vendor_execution(id, None, Operation::Allowance, &context)
+            .await?;
         self.gw
             .storage
             .settings()
-            .get(&format!("px_reset_receipt:{id}"))
+            .get(&receipt_key(&prepared)?)
             .await?
             .as_deref()
-            .map(serde_json::from_str)
+            .map(serde_json::from_str::<BoundReceipt>)
             .transpose()
             .context("Invalid reset receipt")
-            .map(|state| state.unwrap_or_default())
+            .map(|state| state.map(|receipt| receipt.state).unwrap_or_default())
     }
     pub async fn redeem_provider_reset(
         &self,
@@ -82,31 +105,6 @@ impl AdminService {
             profile.capabilities.contains(&Capability::AllowanceControl),
             "Provider does not support manual reset controls"
         );
-        let previous = self.provider_reset_state(id).await?;
-        if previous.request_id.as_deref() == Some(&input.request_id) {
-            if let Some(code) = previous.result {
-                return Ok(AllowanceActionResult {
-                    code,
-                    request_id: input.request_id,
-                });
-            }
-        } else {
-            ensure!(
-                !previous.pending,
-                "Previous reset outcome is unknown; retry its request id"
-            );
-        }
-        let key = format!("px_reset_receipt:{id}");
-        let mut state = ManualResetState {
-            request_id: Some(input.request_id.clone()),
-            result: None,
-            pending: true,
-        };
-        self.gw
-            .storage
-            .settings()
-            .set(&key, &serde_json::to_string(&state)?)
-            .await?;
         let context = VendorCallContext::new(
             Default::default(),
             stravia_runtime_contract::Deadline::fixed(Instant::now() + Duration::from_secs(45)),
@@ -115,6 +113,57 @@ impl AdminService {
             .gw
             .prepare_vendor_execution(id, None, Operation::Allowance, &context)
             .await?;
+        let key = receipt_key(&prepared)?;
+        let previous_raw = self.gw.storage.settings().get(&key).await?;
+        let previous = previous_raw
+            .as_deref()
+            .map(serde_json::from_str::<BoundReceipt>)
+            .transpose()
+            .context("Invalid reset receipt")?;
+        let previous_state = previous
+            .as_ref()
+            .map(|receipt| receipt.state.clone())
+            .unwrap_or_default();
+        if previous_state.request_id.as_deref() == Some(&input.request_id) {
+            if let Some(code) = previous_state.result {
+                return Ok(AllowanceActionResult {
+                    code,
+                    request_id: input.request_id,
+                });
+            }
+        } else {
+            ensure!(
+                !previous_state.pending,
+                "Previous reset outcome is unknown; retry its request id"
+            );
+        }
+        if let Some(receipt) = &previous
+            && receipt.state.pending
+        {
+            ensure!(
+                receipt.provider_id == id
+                    && receipt.oauth_connection_id.as_deref() == prepared.oauth_connection_id(),
+                "The account connection changed while the reset outcome was unresolved"
+            );
+        }
+        let mut receipt = BoundReceipt {
+            state: ManualResetState {
+                request_id: Some(input.request_id.clone()),
+                result: None,
+                pending: true,
+            },
+            provider_id: id.into(),
+            oauth_connection_id: prepared.oauth_connection_id().map(str::to_owned),
+        };
+        let pending_raw = serde_json::to_string(&receipt)?;
+        ensure!(
+            self.gw
+                .storage
+                .settings()
+                .compare_exchange(&key, previous_raw.as_deref(), &pending_raw)
+                .await?,
+            "Reset state changed; refresh and reuse its request id"
+        );
         let output = self
             .gw
             .execute_prepared_vendor(
@@ -153,13 +202,16 @@ impl AdminService {
             .contains(&result.code.as_str()),
             "Unknown reset outcome"
         );
-        state.result = Some(result.code.clone());
-        state.pending = false;
-        self.gw
-            .storage
-            .settings()
-            .set(&key, &serde_json::to_string(&state)?)
-            .await?;
+        receipt.state.result = Some(result.code.clone());
+        receipt.state.pending = false;
+        ensure!(
+            self.gw
+                .storage
+                .settings()
+                .compare_exchange(&key, Some(&pending_raw), &serde_json::to_string(&receipt)?)
+                .await?,
+            "Reset outcome was received but its state changed; retain the request id"
+        );
         Ok(result)
     }
 }

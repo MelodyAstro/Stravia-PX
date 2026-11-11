@@ -243,7 +243,10 @@ impl AdminService {
         if !eligible_allowance_provider(self, &provider) {
             return Err(super::ProviderAllowanceGuardError::Unsupported.into());
         }
-        if keys.iter().any(|key| key.is_empty() || key.trim() != key) {
+        if keys
+            .iter()
+            .any(|key| key.is_empty() || key.trim() != key || key == "reset_credits")
+        {
             return Err(super::ProviderAllowanceGuardError::InvalidKey.into());
         }
         keys.sort();

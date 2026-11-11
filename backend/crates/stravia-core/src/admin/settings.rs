@@ -2,6 +2,11 @@ use super::*;
 
 fn reject_removed_proxy_setting(key: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
+        !key.starts_with(crate::account_usage::SETTING_PREFIX)
+            && !key.starts_with("px_reset_receipt:"),
+        "Account controls are managed through the account allowance API"
+    );
+    anyhow::ensure!(
         !key.starts_with(crate::request_models::SETTING_PREFIX),
         "Request model mappings are managed through the API Key request models API"
     );

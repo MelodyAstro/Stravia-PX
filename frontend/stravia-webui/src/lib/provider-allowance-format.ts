@@ -23,6 +23,8 @@ function localizedAllowanceUnit(unit: string, locale: Locale): string {
       return m.allowances_unit_requests({}, options)
     case 'credits':
       return m.allowances_unit_credits({}, options)
+    case 'resets':
+      return m.allowances_unit_resets({}, options)
     case 'units':
       return m.allowances_unit_units({}, options)
     case 'currency':
