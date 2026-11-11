@@ -1,15 +1,16 @@
 # Strinova
 
-自用的 Stravia 补丁与原生部署维护记录。基线为官方 **v0.6.4**
-（`a100ef42031073fbdd779e4809fb83cac3a8b956`），保留官方源码历史及 AGPL-3.0 许可证。
+Strinova 的补丁与原生部署维护记录。源码基线为官方 **v0.6.5**
+（`42348db6d7fbad32f9bcf56d94fded8a2ec17ec4`），保留上游源码历史及 AGPL-3.0-only 许可证。
 
-改版发布在本仓库 `main`，`px/v0.6.4` 保留同一维护线，`upstream` 指向官方。
-最新状态见 [自定义工具修复与 Team 部署记录](DEPLOYMENT-custom-tools.md)，备份与清理见
-[恢复说明](RECOVERY.md)。
+改版在本仓库 `main` 维护，`upstream` 指向官方。插件拆分与宿主补丁边界见
+[插件维护说明](PLUGIN-MAINTENANCE.md)；v0.6.4 的历史状态见
+[自定义工具修复与 Team 部署记录](DEPLOYMENT-custom-tools.md)，备份与清理见 [恢复说明](RECOVERY.md)。
 
 Claude、Codex 和 GA 的服务端身份、自定义 UA 与 TLS，以及官方客户端版本同步见
-[上游请求身份配置](OUTBOUND-IDENTITY.md)。
-该能力位于 `px/outbound-identity` 候选分支，尚未部署；构建和回归状态见对应 CI 运行。
+[v0.6.5 上游请求身份配置](OUTBOUND-IDENTITY-v0.6.5.md)。
+账号重置次数、手动 reset 和本站累计消费上限见 [账号额度控制](ACCOUNT-CONTROLS.md)。
+消费上限默认关闭，缺少逐次扣费明细时按官方费率保守估算，并与官方余额分开显示。
 
 ## 当前补丁
 
@@ -18,12 +19,13 @@ Claude、Codex 和 GA 的服务端身份、自定义 UA 与 TLS，以及官方�
   管理和开发方法见 [平台插件](PLATFORM-PLUGINS.md)。
 - **GA / Claude Code**：保留 `claude_code_compat` 开关，只作用于 Antigravity 的
   `claude-*` 模型；保留工具参数 JSON Schema，兼容 system 文本投影。组件版本为
-  `0.6.4+masub.cc.2`（本分支源码）。Gemini 的投影不变。
+  `0.6.5+masub.cc.2`（本分支源码）。Gemini 的投影不变。
 - **Codex Responses**：接受、校验并原位保留 `additional_tools`，完整传递 namespace、
   函数 schema、自定义工具格式和位置。主程序及 Codex 插件必须同时更新；仅更新其中
-  一个会继续拒绝请求或丢失工具定义。组件版本为 `0.6.4+masub.responses.3`（本分支源码）。
+  一个会继续拒绝请求或丢失工具定义。组件版本为 `0.6.5+masub.responses.3`（本分支源码）。
   同时支持原生 `custom_tool_call`、自由文本输入增量和工具结果回传；无法表达这些语义的跨协议目标会明确拒绝。
-- 包含 v0.6.4 官方的签名思考块顺序修复，更新主程序时同时重建受影响插件。
+- 保留 v0.6.4 的签名思考块顺序修复，并适配 v0.6.5 的后缀请求钩子、原子插件状态和 Rama/TLS 传输。
+  更新宿主接口时同时重建受影响组件；CI 会导出可复现的四层源码 patch。
 - **请求模型映射**：按 Key 配置自定义客户端名称，支持限时识别实际模型名与协议并
   生成候选；目标仍需通过原有权限检查。见 [配置与识别说明](REQUEST-MODELS.md)。
 
@@ -50,7 +52,7 @@ WebSocket 沿用原分组 Key（`Authorization: Bearer <Key>`）和短模型名�
 # 安装固定版本 Rust、Bun 和 Task；准备 wasm32-wasip2 目标。
 rustup target add wasm32-wasip2
 
-# 完整协议回归；实际执行 643 个测试。
+# v0.6.5 协议回归；当前执行 667 个测试。
 cargo test --locked -p stravia-protocol-codec --lib
 
 # 上游标准流程生成 WebUI、内嵌 Base 组件和原生主程序。
@@ -106,10 +108,10 @@ Responses 目标目录至少包含主程序、Codex Wasm、`source.patch` 和 `m
 }
 ```
 
-主程序在同一文件系统内以硬链接切入版本目录，避免重复占用一份约 144 MiB 程序。
+主程序在同一文件系统内以硬链接切入版本目录，避免重复占用一份程序。
 已验证的官方压缩包可转存运维机冷存储；展开的未使用官方主程序会移除。
-当前和紧邻的 v0.6.4 定制主程序与完整快照保留在服务器。v0.6.2/v0.6.3 的旧原生程序
-已校验后转存冷存储，恢复这些历史快照前须先还原对应程序，详见最新部署记录。
+服务器保留当前版本及最近一次升级所需的完整回滚对；更早的程序和快照经摘要校验后转存本地冷存储。
+恢复历史快照前须先还原对应程序，详见部署记录。
 快照保留运行中的数据、补丁组件、源码差异及清单；可重建的 `staged/` 候选目录不进入
 快照，避免恢复旧版本时又展开一份候选程序。
 
@@ -119,6 +121,9 @@ Responses 目标目录至少包含主程序、Codex Wasm、`source.patch` 和 `m
 `per_key_request_model_mapping_v1`。完整备份包含映射配置，限时识别记录不会持久化。
 
 ## 验证与隐私
+
+v0.6.5 的 CI 包含协议、身份与 TLS、真实 Wasm reset、账号额度并发、管理接口和双数据库 HTTP 升级验收。
+具体通过状态以该提交的 CI 和部署报告为准。以下为 v0.6.4 的历史验证记录：
 
 - v0.6.4 的 643 个协议测试及 7 个 GA 兼容测试通过。
 - 9 项隔离升级测试覆盖补丁保留、首次安装、摘要篡改、其它插件更新、映射功能标记及失败回退。

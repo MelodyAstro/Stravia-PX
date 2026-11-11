@@ -7,6 +7,8 @@
 - Applied provider TLS settings to the new official Rama HTTP/WebSocket transport.
 - Adapted platform hooks to processed-input boundaries; completed history remains protected.
 - Framed the API key model selector with a complete rounded border.
+- Added explicit, idempotent account-reset controls and bounded reset inventory to the Codex and Claude Code components.
+- Added opt-in, account-scoped lifetime site spend estimates, with durable concurrent reservations, uncertain-use accounting and visible credit/USD units.
 - Kept native deployment, stable data paths and CI compilation/tool caches.
 
 

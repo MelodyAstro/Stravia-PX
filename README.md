@@ -25,6 +25,8 @@ history, and usage — desktop app or single binary.
 
 > **Strinova:** This fork adds per-API-Key request model mappings, limited request recognition, and Claude/Codex compatibility patches. See [fork configuration and native upgrade instructions](px/README.md).
 
+> **Account allowances:** Read available reset counts and explicitly confirm manual redemption. Optional lifetime site spend caps default off and use conservative estimates, separate from official balances. See [account controls](px/ACCOUNT-CONTROLS.md).
+
 ![Request Records — every client request, traced live](docs/assets/request-records.png)
 
 > **Status:** Strinova is pre-1.0 and under active development. Configuration and database compatibility may change before a stable release.
