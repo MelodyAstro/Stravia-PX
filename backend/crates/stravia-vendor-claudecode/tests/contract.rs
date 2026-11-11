@@ -632,8 +632,8 @@ async fn official_identity_sync_preserves_state_pins_and_last_good_version() {
                 !request
                     .headers
                     .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case("authorization")
-                        || name.eq_ignore_ascii_case("cookie"))
+                    .any(|field| field.name.eq_ignore_ascii_case("authorization")
+                        || field.name.eq_ignore_ascii_case("cookie"))
             );
         }
         assert_eq!(
