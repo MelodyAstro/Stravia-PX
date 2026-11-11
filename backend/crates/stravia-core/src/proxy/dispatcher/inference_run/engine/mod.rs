@@ -1335,7 +1335,9 @@ async fn dispatch_round(
         return *response;
     }
 
-    let outcome = execute_shared_model_turn(SharedModelTurnInput {
+    // The buffered/streaming turn state is large. Keep it out of the request
+    // hook dispatcher's poll frame, including unoptimized PostgreSQL builds.
+    let outcome = Box::pin(execute_shared_model_turn(SharedModelTurnInput {
         executor: Arc::clone(&executor),
         gateway: &gw,
         request,
@@ -1348,7 +1350,7 @@ async fn dispatch_round(
         projection,
         ledger,
         history_boundary,
-    })
+    }))
     .await;
     *delivery_state = outcome.delivery;
     *outcome.response

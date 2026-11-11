@@ -249,7 +249,9 @@ impl ModelTurnExecutor for LiveModelTurnExecutor {
                 () = deadline.wait() => {
                     Err(ModelTurnError::new("deadline_exceeded", "Model Turn deadline exceeded"))
                 }
-                result = async {
+                // Separate preparation from the outer cancellation-select frame.
+                // PostgreSQL continuation work must fit the default worker stack.
+                result = Box::pin(async {
                     let trace = input.request.meta.redaction.clone();
                     let principal = input.principal.clone();
                     let source_generation_id = input.compaction_source_generation_id.clone();
@@ -353,7 +355,7 @@ impl ModelTurnExecutor for LiveModelTurnExecutor {
                         terminal: terminal.take().expect("Model Turn terminal owner"),
                     });
                     Ok::<_, ModelTurnError>(turn)
-                } => result,
+                }) => result,
             }
         };
         if let Err(error) = &result {
