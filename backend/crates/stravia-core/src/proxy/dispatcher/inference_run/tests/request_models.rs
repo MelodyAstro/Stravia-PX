@@ -35,8 +35,32 @@ fn config(target: &str) -> RequestModelConfig {
     }
 }
 
-#[tokio::test]
-async fn request_models_route_same_bare_name_by_key_and_preserve_response_name() {
+#[test]
+fn request_models_route_same_bare_name_by_key_and_preserve_response_name() {
+    // Match upstream continuation fixtures: several complete Gateway requests
+    // produce a large state machine in the intentionally unoptimized CI Core.
+    std::thread::Builder::new()
+        .name("request_models_route_same_bare_name_by_key_and_preserve_response_name".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let future =
+                request_models_route_same_bare_name_by_key_and_preserve_response_name_impl();
+            eprintln!(
+                "request-mapping fixture future: {} bytes",
+                std::mem::size_of_val(&future)
+            );
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(Box::pin(future))
+        })
+        .expect("test thread")
+        .join()
+        .expect("test thread panicked");
+}
+
+async fn request_models_route_same_bare_name_by_key_and_preserve_response_name_impl() {
     let data_dir = tempfile::tempdir().unwrap();
     let gateway = Gateway::new(crate::config::GatewayConfig {
         data_dir: data_dir.path().into(),
@@ -190,8 +214,24 @@ async fn request_models_route_same_bare_name_by_key_and_preserve_response_name()
     close_test_gateway(resumed, data_dir).await;
 }
 
-#[tokio::test]
-async fn request_models_do_not_expand_permissions_and_capture_unknown_authenticated_names() {
+#[test]
+fn request_models_do_not_expand_permissions_and_capture_unknown_authenticated_names() {
+    // Match upstream continuation fixtures: several complete Gateway requests
+    // produce a large state machine in the intentionally unoptimized CI Core.
+    std::thread::Builder::new()
+        .name("request_models_do_not_expand_permissions_and_capture_unknown_authenticated_names".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let future = request_models_do_not_expand_permissions_and_capture_unknown_authenticated_names_impl();
+            eprintln!("request-mapping fixture future: {} bytes", std::mem::size_of_val(&future));
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all().build().expect("test runtime")
+                .block_on(Box::pin(future))
+        })
+        .expect("test thread").join().expect("test thread panicked");
+}
+
+async fn request_models_do_not_expand_permissions_and_capture_unknown_authenticated_names_impl() {
     let data_dir = tempfile::tempdir().unwrap();
     let gateway = Gateway::new(crate::config::GatewayConfig {
         data_dir: data_dir.path().into(),
