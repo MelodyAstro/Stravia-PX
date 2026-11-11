@@ -374,15 +374,15 @@ async fn hook_and_tool_requests_pin_config_and_survive_disable_and_uninstall() {
     manager.uninstall(id).await.unwrap();
 
     assert!(matches!(
-        old_run.on_request(&mut old_request).await.unwrap().control,
+        old_run.on_request_with_provenance(&mut old_request).await.unwrap().control,
         HookControl::Continue
     ));
     assert_eq!(old_request.instructions.as_deref(), Some("old policy"));
     assert!(!old_request.tools.as_ref().unwrap().is_empty());
-    new_run.on_request(&mut new_request).await.unwrap();
+    new_run.on_request_with_provenance(&mut new_request).await.unwrap();
     assert_eq!(new_request.instructions.as_deref(), Some("new policy"));
     disabled_run
-        .on_request(&mut disabled_request)
+        .on_request_with_provenance(&mut disabled_request)
         .await
         .unwrap();
     assert_eq!(disabled_request.instructions, None);
@@ -473,7 +473,7 @@ async fn all_hook_stages_apply_through_the_existing_contract() {
         .begin(context(), &request, ContextCompleteness::Full, 0)
         .unwrap();
     assert!(run.requires_terminal_buffering());
-    run.on_request(&mut request).await.unwrap();
+    run.on_request_with_provenance(&mut request).await.unwrap();
     run.set_route(RouteContext {
         model_id: "route".into(),
         provider_id: "private-provider".into(),
