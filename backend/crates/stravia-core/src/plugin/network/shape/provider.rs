@@ -48,6 +48,11 @@ impl ShapeRegistry {
                     })
                     .collect::<Result<_, _>>()?;
                 tls.advertise_only_cipher_suites.clear();
+                // SCSV is a renegotiation signal, not an encryption suite.
+                // Retain the captured signal when replacing the cipher policy.
+                if tls.renegotiation.as_deref() == Some("scsv") {
+                    tls.cipher_suites.push("0x00ff".into());
+                }
             }
             if !profile.key_exchange_groups.is_empty() {
                 tls.groups = profile.key_exchange_groups.clone();
