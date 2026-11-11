@@ -160,7 +160,8 @@ jobs:
         id: compiled-tools
         uses: actions/cache/restore@v5
         with:
-          key: px-tools-v1-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('.github/workflows/px-native-linux.yml', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'patches/**', '.cargo/config.toml', 'backend/crates/stravia-vendor-*/**', 'backend/crates/stravia-runtime-contract/**', 'backend/crates/stravia-protocol-codec/**', 'backend/crates/stravia-core/assets/providers.stravia.json', 'frontend/stravia-webui/src/assets/icons/*.svg', 'px/ops/ci-tools-cache.py') }}
+          # Test-only edits reuse deployable guests; current native tests still run below.
+          key: px-tools-v1-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('.github/workflows/px-native-linux.yml', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'patches/**', '.cargo/config.toml', 'backend/crates/stravia-vendor-*/**', 'backend/crates/stravia-runtime-contract/**', 'backend/crates/stravia-protocol-codec/**', 'backend/crates/stravia-core/assets/providers.stravia.json', 'frontend/stravia-webui/src/assets/icons/*.svg', 'px/ops/ci-tools-cache.py', '!backend/crates/stravia-vendor-*/tests/**') }}
           path: |
             target/debug/stravia-build-vendors
             target/vendor-plugins
