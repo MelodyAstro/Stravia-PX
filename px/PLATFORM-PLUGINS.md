@@ -75,7 +75,8 @@ the uploaded identity matches that installed row before changing anything.
 
 | Operation | Input fields in addition to `config`, `event`, `round` |
 | --- | --- |
-| `request` | `request`, and `route` when available |
+| `request` | `request`, `input_start`, and `route` when available |
+| `resolve_model` | `request_model`, `key_mappings`, `eligible_models`; see [model policy](PLUGIN-MAINTENANCE.md) |
 | `upstream_response` | `request`, `response`, `route` |
 | `tool_result` | `result` containing tool/call identifiers, content, error flag and metadata; `route` |
 | `client_output` | `response`, `route` |
@@ -99,6 +100,7 @@ Supported actions reuse the host's existing hook validation and ordering:
 | --- | --- | --- |
 | `set_system` | `value`: string or null | Request |
 | `set_model` | `value`: string | Request |
+| `splice_input` | suffix-relative `start`, `end`, `items` | Request |
 | `replace_request` | `value`: canonical request | Request |
 | `set_content` | `value`: string | Upstream response / client output |
 | `set_reasoning` | `value`: string or null | Upstream response / client output |

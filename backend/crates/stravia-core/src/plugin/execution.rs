@@ -994,8 +994,19 @@ impl Gateway {
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
             .map(|(_, value)| value.as_str());
-        let shape_overrides = [false, true]
-            .map(|ws| stravia_vendor_sdk::transport::shape_override(&provider.options, ws, ua));
+        let shape_overrides = [false, true].map(|ws| {
+            let key = if ws { "tls_ws_shape" } else { "tls_shape" };
+            if ua.is_none()
+                && context.client_headers.is_empty()
+                && provider.options.get(key).and_then(Value::as_str) == Some("client")
+            {
+                // Host-originated discovery/allowance/auth has no request client.
+                // Keep the vendor's own shape for these auxiliary operations.
+                Ok(None)
+            } else {
+                stravia_vendor_sdk::transport::shape_override(&provider.options, ws, ua)
+            }
+        });
         let [http_shape, ws_shape] = shape_overrides;
         let shape_overrides = [
             http_shape.map_err(anyhow::Error::msg)?,

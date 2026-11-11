@@ -39,6 +39,72 @@ fn context() -> SessionContext {
     }
 }
 
+#[tokio::test]
+async fn model_policy_component_is_independent_scoped_and_can_be_disabled() {
+    let directory = tempfile::tempdir().unwrap();
+    let manager = PlatformPlugins::open(directory.path()).await.unwrap();
+    let component = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../target/wasm32-wasip2/release/strinova_model_mapping.wasm");
+    let summary = manager
+        .install(std::fs::read(component).unwrap())
+        .await
+        .unwrap();
+    let config = crate::request_models::RequestModelConfig {
+        enabled: true,
+        mappings: Vec::new(),
+    };
+    let eligible = vec![crate::request_models::RequestModelTarget {
+        id: "team".into(),
+        model_id: "team/gpt".into(),
+        display_name: "Team".into(),
+    }];
+    assert!(
+        manager
+            .resolve_model("gpt", &config, &eligible)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    manager
+        .update(
+            &summary.manifest.id,
+            PlatformPluginUpdate {
+                enabled: Some(true),
+                config: Some(json!({"aliases":{"gpt":"team/gpt"}})),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .resolve_model("gpt", &config, &eligible)
+            .await
+            .unwrap(),
+        Some(Some("team".into()))
+    );
+    assert_eq!(
+        manager.resolve_model("gpt", &config, &[]).await.unwrap(),
+        Some(None)
+    );
+    manager
+        .update(
+            &summary.manifest.id,
+            PlatformPluginUpdate {
+                enabled: Some(false),
+                config: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .resolve_model("gpt", &config, &eligible)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
 async fn tools_gateway(directory: &Path) -> crate::Gateway {
     crate::Gateway::new(crate::config::GatewayConfig {
         data_dir: directory.to_path_buf(),
