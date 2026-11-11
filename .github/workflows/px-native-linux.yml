@@ -48,19 +48,19 @@ jobs:
           POSTGRES_USER: strinova_test
           POSTGRES_PASSWORD: isolated_ci_fixture
           POSTGRES_DB: strinova_test
-        ports: ['5432/tcp']
+        ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U strinova_test"
           --health-interval 5s --health-timeout 5s --health-retries 12
       redis:
         image: redis:8-alpine
-        ports: ['6379/tcp']
+        ports: ['6379:6379']
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 12
     env:
-      DB_URL: postgresql://strinova_test:isolated_ci_fixture@127.0.0.1:${{ job.services.postgres.ports[5432] }}/strinova_test
-      STRAVIA_TEST_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports[6379] }}/0
+      DB_URL: postgresql://strinova_test:isolated_ci_fixture@127.0.0.1:5432/strinova_test
+      STRAVIA_TEST_REDIS_URL: redis://127.0.0.1:6379/0
     steps:
       - name: Reserve space for workspace cache archives
         shell: bash
