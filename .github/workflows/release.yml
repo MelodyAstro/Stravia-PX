@@ -28,7 +28,8 @@ env:
 jobs:
   checks:
     name: Release checks
-    if: github.event_name != 'workflow_dispatch' || !inputs.macos_only
+    # Fork native releases use px-publish.yml; keep upstream's full matrix opt-in.
+    if: (github.repository == 'Stravia-AI/StraviaPlatform' && github.event_name != 'workflow_dispatch') || (github.event_name == 'workflow_dispatch' && !inputs.macos_only)
     uses: ./.github/workflows/ci.yml
 
   prepare:

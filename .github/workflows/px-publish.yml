@@ -1,0 +1,48 @@
+name: Strinova native release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Strinova Native Linux run for the current main commit
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: strinova-native-release-v0.6.5-patch
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'MelodyAstro/Strinova' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify tested source and artifact provenance
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          python3 px/ops/publish-native-release.py --verify-run
+      - uses: actions/download-artifact@v4
+        with:
+          name: strinova-linux-x86_64-gnu-${{ github.sha }}
+          path: release-input
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify checksums and prepare independent components
+        run: |
+          python3 -m unittest discover -s px/ops -p 'test_publish_native_release.py'
+          python3 px/ops/publish-native-release.py --artifact-dir release-input --output-dir release-assets
+      - name: Publish tested native release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 px/ops/publish-native-release.py --output-dir release-assets --publish

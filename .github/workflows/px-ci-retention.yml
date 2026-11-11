@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: '23 3 * * *'
   workflow_run:
-    workflows: [Strinova Native Linux, Strinova source preparation, Strinova plugin components]
+    workflows: [Strinova Native Linux, Strinova source preparation, Strinova plugin components, Strinova native release]
     types: [completed]
 
 permissions:

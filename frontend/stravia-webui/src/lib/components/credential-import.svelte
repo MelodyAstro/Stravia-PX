@@ -105,10 +105,10 @@ function status(code: string): string {
   <Dialog.Content
     class="max-h-[85dvh] overflow-y-auto sm:max-w-xl"
     showCloseButton={!busy}
-    onInteractOutside={(event) => {
+    onInteractOutside={(event: Event) => {
       if (busy) event.preventDefault()
     }}
-    onEscapeKeydown={(event) => {
+    onEscapeKeydown={(event: KeyboardEvent) => {
       if (busy) event.preventDefault()
     }}>
     <Dialog.Header>
@@ -134,7 +134,7 @@ function status(code: string): string {
         type="file"
         accept=".json,.txt,application/json,text/plain"
         disabled={busy}
-        onchange={(event) => void loadFile(event)} />
+        onchange={(event: Event) => void loadFile(event)} />
       <Label for="credential-import-json">{m.credential_import_json()}</Label>
       <Textarea
         id="credential-import-json"
