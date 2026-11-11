@@ -218,8 +218,17 @@ def stage_package(package, inspected, candidate, static_root):
     require(not candidate.exists() and not candidate.is_symlink(),
             'Candidate release already exists; choose a new release_name')
     check_immutable_assets(inspected, static_root)
+    # pathlib applies mode only to the final directory. Under our private
+    # deployment umask, a newly created upstream-version parent would be 0700
+    # and prevent the service user from reaching the executable.
+    created = []
+    parent = candidate
+    while not parent.exists():
+        created.append(parent)
+        parent = parent.parent
     candidate.mkdir(parents=True, mode=0o755)
-    candidate.chmod(0o755)
+    for parent in created:
+        parent.chmod(0o755)
     seen = set()
     with tarfile.open(package, 'r:gz') as archive:
         for member in archive:

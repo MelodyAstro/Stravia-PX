@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -61,6 +62,25 @@ def inspect(package, files):
 
 
 class NativePackageTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'POSIX directory access permissions')
+    def test_new_release_parents_allow_service_access_under_private_umask(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original_mode = root.stat().st_mode & 0o777
+            package, files = make_package(root)
+            inspected = inspect(package, files)
+            candidate = root / 'releases/v0.6.5/native-patch'
+            previous_umask = os.umask(0o077)
+            try:
+                deploy.stage_package(package, inspected, candidate, root / 'static')
+            finally:
+                os.umask(previous_umask)
+            for directory in [candidate, candidate.parent, candidate.parent.parent]:
+                self.assertEqual(directory.stat().st_mode & 0o777, 0o755)
+            self.assertEqual((candidate / 'stravia-server').stat().st_mode & 0o777, 0o755)
+            self.assertEqual((candidate / 'codex.wasm').stat().st_mode & 0o777, 0o600)
+            self.assertEqual(root.stat().st_mode & 0o777, original_mode)
+
     def test_upstream_upgrade_requires_exact_pins_and_rejects_downgrade(self):
         deploy.validate_release_transition('v0.6.4', 'v0.6.4', {})
         with self.assertRaisesRegex(RuntimeError, 'pinned previous'):
