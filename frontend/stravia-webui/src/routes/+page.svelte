@@ -251,7 +251,7 @@ async function submitEdit(id: string) {
   </Tooltip.Root>
 {/snippet}
 
-<svelte:head><title>{title} · Stravia</title></svelte:head>
+<svelte:head><title>{title} · Strinova</title></svelte:head>
 <section bind:this={surface} class="chat-surface">
   {#if isTauri}<DesktopPortNotice />{/if}
   <header class="flex min-w-0 items-center gap-2">

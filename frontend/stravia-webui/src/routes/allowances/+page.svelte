@@ -449,7 +449,7 @@ function allowanceErrorMessage(category: ProviderAllowanceErrorCategory): string
 }
 </script>
 
-<svelte:head><title>{m.allowances_title()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.allowances_title()} · Strinova</title></svelte:head>
 
 {#snippet conditionMark(condition: AllowanceCondition | undefined)}
   {#if condition === 'tight'}

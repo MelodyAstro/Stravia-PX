@@ -14,7 +14,7 @@ const configQuery = createQuery(() => ({
 }))
 </script>
 
-<svelte:head><title>{m.media_understanding_title()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.media_understanding_title()} · Strinova</title></svelte:head>
 
 <div class="route-page route-page-column">
   <PageHeader title={m.media_understanding_title()} />

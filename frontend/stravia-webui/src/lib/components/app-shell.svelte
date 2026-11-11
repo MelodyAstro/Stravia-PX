@@ -447,7 +447,7 @@ onMount(() => {
         windowChrome.controls === 'native' ? (sidebarCollapsed && hasNavigation ? 'md:w-32 md:ps-20' : 'ps-20') : '',
       ]}>
       {#if !hasNavigation || !isDesktopNavigation || !sidebarCollapsed}
-        <div class="flex min-w-0 items-center gap-2 pe-2" aria-label="Stravia 观策行">
+        <div class="flex min-w-0 items-center gap-2 pe-2" aria-label="Strinova">
           <BrandMark class="size-6" state="launch" />
           <BrandWordmark class="text-sm" />
         </div>

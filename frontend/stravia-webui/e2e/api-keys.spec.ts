@@ -99,7 +99,7 @@ test('API Key editor preserves disabled transparent injection selections', async
   await expect(generationSelection).toBeDisabled()
   await expect(searchSelection).toBeDisabled()
   await expect(
-    page.getByRole('link', { name: 'Turn on this feature in Advanced Features before Stravia can expose it.' }),
+    page.getByRole('link', { name: 'Turn on this feature in Advanced Features before Strinova can expose it.' }),
   ).toHaveCount(3)
   await page.getByRole('button', { name: 'Save API Key' }).click()
 
@@ -146,7 +146,7 @@ test('API Key editor keeps optional help in tooltips and required scope visible 
     await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0)
 
     // Access scope is required information and stays visible without hover.
-    await expect(overlay.getByText('Lets this key call Stravia tools through MCP.')).toBeVisible()
+    await expect(overlay.getByText('Lets this key call Strinova tools through MCP.')).toBeVisible()
     await expect(overlay.getByText(/every current and future model/)).toBeVisible()
     await expect(
       overlay.getByText('Adds the selected features to compatible model requests without client changes', {
@@ -255,6 +255,18 @@ test('API Key editor groups and filters allowed model selections', async ({ page
   await allowAllModels.click()
   await expect(allowAllModels).not.toBeChecked()
   const modelPicker = page.locator('#api-key-model-picker')
+  const modelScope = modelPicker.locator('xpath=ancestor::*[@data-slot="setting-row"][1]')
+  for (const width of [1920, 544, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 })
+    const frame = await modelScope.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return { borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth], radius: style.borderTopLeftRadius, width: element.clientWidth, scrollWidth: element.scrollWidth }
+    })
+    expect(frame.borders).toEqual(['1px', '1px', '1px', '1px'])
+    expect(parseFloat(frame.radius)).toBeGreaterThanOrEqual(8)
+    expect(frame.scrollWidth).toBeLessThanOrEqual(frame.width)
+  }
+  await page.setViewportSize({ width: 544, height: 832 })
   await expect(modelPicker).toContainText('Allowed: 2')
   await modelPicker.click()
   const modelMenu = page.locator('[data-slot="popover-content"]')

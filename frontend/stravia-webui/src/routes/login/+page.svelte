@@ -46,12 +46,12 @@ async function submit(): Promise<void> {
 }
 </script>
 
-<svelte:head><title>{m.login_sign_stravia()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.login_sign_stravia()} · Strinova</title></svelte:head>
 
 <main class="grid place-items-center bg-background p-4 sm:p-8">
   <div class="flex w-full max-w-md flex-col gap-8">
     <header class="flex items-center justify-between gap-4">
-      <div class="flex min-w-0 items-center gap-2" aria-label="Stravia 观策行">
+      <div class="flex min-w-0 items-center gap-2" aria-label="Strinova">
         <BrandMark class="size-8" state={submitting ? 'running' : 'static'} />
         <p class="text-lg"><BrandWordmark /></p>
         <p class="text-xs tracking-[0.08em] text-muted-foreground">观策行</p>

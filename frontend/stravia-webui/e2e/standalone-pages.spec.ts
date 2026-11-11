@@ -78,7 +78,7 @@ test.describe('Login', () => {
       await page.goto('/login')
 
       await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
-      await expect(page.getByRole('heading', { level: 1, name: 'Sign in to Stravia' })).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1, name: 'Sign in to Strinova' })).toBeVisible()
       await expect(page.getByRole('heading', { level: 2 })).toHaveCount(0)
       await expectNoApplicationNavigation(page)
 
@@ -103,7 +103,7 @@ test.describe('Login', () => {
     await expect(page.getByText('The support platform for AI agents')).toHaveCount(0)
     await expect(page.getByText(/Connect providers, models, and tools/)).toHaveCount(0)
     await expect(page.getByText(/Enter the administrator username and password/)).toHaveCount(0)
-    await expect(page.getByText('Choose the language used by Stravia.')).toHaveCount(0)
+    await expect(page.getByText('Choose the language used by Strinova.')).toHaveCount(0)
     await expect(page.getByLabel('Username')).toBeVisible()
     await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Show password' })).toBeVisible()
@@ -112,7 +112,7 @@ test.describe('Login', () => {
     await page.getByLabel('Password', { exact: true }).fill('secret')
     await page.keyboard.press('Enter')
     await expect(
-      page.getByText('Stravia Server is unavailable. Check the connection and try again.', { exact: true }),
+      page.getByText('Strinova Server is unavailable. Check the connection and try again.', { exact: true }),
     ).toBeVisible()
     await expect(page.getByLabel('Username')).toBeFocused()
     await expect(page.getByLabel('Password', { exact: true })).toHaveValue('secret')
@@ -128,7 +128,7 @@ test.describe('Setup', () => {
     for (const viewport of viewports) {
       await page.setViewportSize(viewport)
       await page.goto('/setup')
-      const heading = page.getByRole('heading', { level: 1, name: 'Set up Stravia Server' })
+      const heading = page.getByRole('heading', { level: 1, name: 'Set up Strinova Server' })
       await expect(heading).toBeVisible()
       await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
       await expectNoApplicationNavigation(page)
@@ -175,7 +175,7 @@ test.describe('Setup', () => {
       if (frame === page.mainFrame()) navigations += 1
     })
     await chooseLanguage(page, '简体中文')
-    await expect(page.getByRole('heading', { level: 1, name: '设置 Stravia Server' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: '设置 Strinova Server' })).toBeVisible()
     await expect(page.locator('#setup-token')).toHaveValue('one-time-token')
     expect(navigations).toBe(0)
     await chooseLanguage(page, 'English')
@@ -336,7 +336,7 @@ test.describe('Not found', () => {
       const heading = page.getByRole('heading', { level: 1, name: 'Page not found' })
       await expect(heading).toBeVisible()
       await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1)
-      await expect(page.getByText('404 · Stravia')).toHaveCount(0)
+      await expect(page.getByText('404 · Strinova')).toHaveCount(0)
       await expectNoApplicationNavigation(page)
 
       const title = await heading.boundingBox()
@@ -404,7 +404,7 @@ test.describe('Global error', () => {
 
     await expect(page.getByText(/part of this page could not be loaded/i)).toBeVisible()
     await expect(
-      page.getByText('Reload the page. If the problem continues, check that Stravia is running and try again.'),
+      page.getByText('Reload the page. If the problem continues, check that Strinova is running and try again.'),
     ).toBeVisible()
     await expect(page.locator('body')).not.toContainText('dynamically imported module')
     for (const node of nodes) await expect(page.locator('body')).not.toContainText(node)
@@ -437,7 +437,7 @@ test.describe('Global error', () => {
 
     await expect(page.getByRole('heading', { level: 1, name: 'This page is temporarily unavailable' })).toBeVisible()
     await expect(
-      page.getByText('Reload the page. If the problem continues, check that Stravia is running and try again.'),
+      page.getByText('Reload the page. If the problem continues, check that Strinova is running and try again.'),
     ).toBeVisible()
     await expect(page.getByText(/part of this page could not be loaded/i)).toHaveCount(0)
     await expect(page.locator('body')).not.toContainText('hunter2')
@@ -468,7 +468,7 @@ test.describe('Server startup', () => {
     for (const viewport of viewports) {
       await page.setViewportSize(viewport)
       await page.goto('/')
-      await expect(page.getByRole('heading', { level: 1, name: 'Starting Stravia' })).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1, name: 'Starting Strinova' })).toBeVisible()
       await expect(page.getByText('Migrating history records', { exact: true })).toBeVisible()
       await expect(page.getByText('17 / 42')).toBeVisible()
       await expect(page.getByText('40%')).toBeVisible()
@@ -537,7 +537,7 @@ test.describe('Server startup', () => {
         await page.route('**/api/v1/auth/state', (route) => route.fulfill({ json: signedOut }))
         await page.setViewportSize({ width: 320, height: 640 })
         await page.goto('/')
-        const heading = page.getByRole('heading', { level: 1, name: chinese ? '正在启动 Stravia' : 'Starting Stravia' })
+        const heading = page.getByRole('heading', { level: 1, name: chinese ? '正在启动 Strinova' : 'Starting Strinova' })
         const bar = page.getByRole('progressbar')
         await expect(heading).toBeVisible()
         await expect(page.getByText(retentionLabel, { exact: true })).toBeVisible()
@@ -699,7 +699,7 @@ test.describe('Desktop startup', () => {
     for (const viewport of viewports) {
       await page.setViewportSize(viewport)
       await page.goto('/')
-      await expect(page.getByRole('heading', { level: 1, name: 'Starting Stravia' })).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1, name: 'Starting Strinova' })).toBeVisible()
       await expect(page.getByText('Migrating history records', { exact: true })).toBeVisible()
       await expect(page.getByText('5 / 20')).toBeVisible()
       await expect(page.getByText('25%')).toBeVisible()
@@ -723,7 +723,7 @@ test.describe('Desktop startup', () => {
     for (const viewport of viewports) {
       await page.setViewportSize(viewport)
       await page.goto('/')
-      await expect(page.getByRole('heading', { level: 1, name: 'Stravia could not start' })).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1, name: 'Strinova could not start' })).toBeVisible()
       await expect(page.getByText('Local gateway', { exact: true }).first()).toBeVisible()
       await expect(page.getByText(/clients and the management interface are unavailable/)).toBeVisible()
       await expect(page.getByText(/Restarting does not reset or repair your data/)).toBeVisible()
@@ -773,10 +773,10 @@ test.describe('Desktop startup', () => {
     await page.goto('/')
 
     await page.getByTestId('startup-restart').click()
-    await expect(page.getByRole('alert').filter({ hasText: 'Stravia could not restart.' })).toBeVisible()
+    await expect(page.getByRole('alert').filter({ hasText: 'Strinova could not restart.' })).toBeVisible()
     await expect(page.getByTestId('startup-restart')).toBeEnabled()
     await page.getByTestId('startup-exit').click()
-    await expect(page.getByRole('alert').filter({ hasText: 'Stravia could not exit.' })).toBeVisible()
+    await expect(page.getByRole('alert').filter({ hasText: 'Strinova could not exit.' })).toBeVisible()
     await page.getByText('Technical details', { exact: true }).click()
     await page.getByTestId('startup-logs').click()
     await expect(page.getByRole('alert').filter({ hasText: 'The startup log could not be opened.' })).toBeVisible()
@@ -797,7 +797,7 @@ test.describe('Desktop startup', () => {
       },
     })
     await page.goto('/')
-    await expect(page.getByRole('heading', { level: 1, name: 'Stravia could not start' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'Strinova could not start' })).toBeVisible()
     await expect(page.getByText(/could not complete startup/i)).toBeVisible()
     await page.getByText('Technical details', { exact: true }).click()
     await expect(page.getByText('silent start could not create the tray')).toBeVisible()
@@ -835,14 +835,14 @@ test.describe('Desktop startup', () => {
 
     await expect(page.getByText('A desktop integration is unavailable')).toBeVisible()
     await expect(page.getByText(/system tray integration is unavailable/)).toBeVisible()
-    await expect(page.getByText('Stravia recovered from an earlier interrupted startup')).toBeVisible()
+    await expect(page.getByText('Strinova recovered from an earlier interrupted startup')).toBeVisible()
     await expect(page.getByText(/local gateway could not start/i)).toHaveCount(0)
-    await expect(page.getByRole('heading', { name: 'Stravia could not start' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Strinova could not start' })).toHaveCount(0)
 
     await page.getByRole('button', { name: 'Open startup log' }).click()
     await expect(page.getByRole('alert').filter({ hasText: 'The startup log could not be opened.' })).toBeVisible()
     await page.getByRole('button', { name: 'Dismiss startup notice' }).first().click()
-    await expect(page.getByText('Stravia recovered from an earlier interrupted startup')).toHaveCount(0)
+    await expect(page.getByText('Strinova recovered from an earlier interrupted startup')).toHaveCount(0)
     await expect(page.getByText('A desktop integration is unavailable')).toBeVisible()
     await page.getByRole('button', { name: 'Dismiss startup notice' }).click()
     await expect(page.getByText('A desktop integration is unavailable')).toHaveCount(0)

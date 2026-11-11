@@ -7,7 +7,7 @@ import { Button } from '#lib/components/ui/button/index.js'
 const requestedPath = $derived(page.url.pathname)
 </script>
 
-<svelte:head><title>{m.not_found_page_not_found()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.not_found_page_not_found()} · Strinova</title></svelte:head>
 
 <main class="grid place-items-center p-4 sm:p-8">
   <section class="flex w-full max-w-2xl min-w-0 flex-col gap-4" aria-labelledby="not-found-title">

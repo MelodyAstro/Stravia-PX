@@ -478,13 +478,13 @@ test('settings groups are links with history, current state, and a General fallb
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Settings')
   await expect(nav.getByRole('link')).toHaveText(['General', 'Network', 'Data', 'Account', 'Advanced'])
   await expect(nav.getByRole('link', { name: 'General' })).toHaveAttribute('aria-current', 'page')
-  await expect(page).toHaveTitle('General · Settings · Stravia')
+  await expect(page).toHaveTitle('General · Settings · Strinova')
 
   await nav.getByRole('link', { name: 'Network' }).click()
   await expect(page).toHaveURL(/\/settings\?view=network$/)
   await expect(nav.getByRole('link', { name: 'Network' })).toHaveAttribute('aria-current', 'page')
   await expect(nav.getByRole('link', { name: 'General' })).not.toHaveAttribute('aria-current', 'page')
-  await expect(page).toHaveTitle('Network · Settings · Stravia')
+  await expect(page).toHaveTitle('Network · Settings · Strinova')
   await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Proxy'])
   await nav.getByRole('link', { name: 'Advanced' }).click()
   await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Upstream RPM queue', 'Diagnostics'])
@@ -707,7 +707,7 @@ test('advanced features keep separate media and web search surfaces', async ({ p
   await expect(sheet.locator('#search-external-route')).toHaveValue('External search')
   // 切换方式不提交半个绑定，也不丢掉另一种方式的草稿。
   await sheet.locator('#search-backend').click()
-  await page.getByRole('option', { name: 'Use a Stravia model' }).click()
+  await page.getByRole('option', { name: 'Use a Strinova model' }).click()
   await expect(sheet.locator('#search-local-model')).toHaveValue('Search model')
   await sheet.locator('#search-backend').click()
   await page.getByRole('option', { name: 'External Route' }).click()
@@ -733,7 +733,7 @@ test('advanced features keep separate media and web search surfaces', async ({ p
   // 切回 Local：原预算仍在，Local 来源重新出现。
   await page.getByRole('button', { name: 'Edit search method', exact: true }).click()
   await sheet.locator('#search-backend').click()
-  await page.getByRole('option', { name: 'Use a Stravia model' }).click()
+  await page.getByRole('option', { name: 'Use a Strinova model' }).click()
   await expect(sheet.locator('#search-local-model')).toHaveValue('')
   await sheet.locator('#search-local-model').click()
   await expect(page.getByText('search-model', { exact: true })).toBeVisible()
@@ -1955,7 +1955,7 @@ test('web search keeps one settings column with aligned actions and operable sou
 })
 
 test('server update notification skips one version without hiding Settings or exposing download', async ({ page }) => {
-  const releaseUrl = 'https://github.com/Stravia-AI/StraviaPlatform/releases/tag/v1.2.0'
+  const releaseUrl = 'https://github.com/Strinova-AI/StrinovaPlatform/releases/tag/v1.2.0'
   let version = '1.2.0'
   let skippedVersion: string | null = null
   await page.addInitScript(() => {
@@ -1979,7 +1979,7 @@ test('server update notification skips one version without hiding Settings or ex
             version,
             published_at: '2026-09-04T00:00:00Z',
             release_url: releaseUrl,
-            manifest_url: 'https://github.com/Stravia-AI/StraviaPlatform/releases/download/v1.2.0/stravia-updater.json',
+            manifest_url: 'https://github.com/Strinova-AI/StrinovaPlatform/releases/download/v1.2.0/stravia-updater.json',
             download_available: true,
             download_error: null,
           },
@@ -1992,7 +1992,7 @@ test('server update notification skips one version without hiding Settings or ex
 
   await page.clock.install()
   await page.goto('/settings')
-  const notificationTitle = page.getByText('A Stravia update is available', { exact: true })
+  const notificationTitle = page.getByText('A Strinova update is available', { exact: true })
   await expect(notificationTitle).toHaveCount(1)
   await page.clock.fastForward(60_000)
   await expect(notificationTitle).toHaveCount(1)
@@ -2001,7 +2001,7 @@ test('server update notification skips one version without hiding Settings or ex
   await page.getByRole('button', { name: 'Check for updates', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Check for updates', exact: true })).toBeEnabled()
   await expect(notificationTitle).toHaveCount(1)
-  const notification = page.getByRole('status').filter({ hasText: 'A Stravia update is available' })
+  const notification = page.getByRole('status').filter({ hasText: 'A Strinova update is available' })
   await notification.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(notificationTitle).toHaveCount(0)
   expect(skippedVersion).toBeNull()
@@ -2017,7 +2017,7 @@ test('server update notification skips one version without hiding Settings or ex
   await page.getByRole('button', { name: 'View release notes' }).click()
   expect(await page.evaluate(() => sessionStorage.getItem('opened-release-url'))).toBe(releaseUrl)
   await page.getByRole('button', { name: 'Skip this version' }).click()
-  await expect(page.getByText('A Stravia update is available')).toHaveCount(0)
+  await expect(page.getByText('A Strinova update is available')).toHaveCount(0)
 
   await page.goto('/settings')
   await expect(page.getByRole('heading', { name: 'Updates' })).toBeVisible()
@@ -2035,7 +2035,7 @@ test('server update notification skips one version without hiding Settings or ex
 })
 
 test('cached update remains actionable when the latest automatic check fails', async ({ page }) => {
-  const releaseUrl = 'https://github.com/Stravia-AI/StraviaPlatform/releases/tag/v1.2.0'
+  const releaseUrl = 'https://github.com/Strinova-AI/StrinovaPlatform/releases/tag/v1.2.0'
   const status = {
     current_version: '1.0.0',
     check_status: 'error',
@@ -2049,7 +2049,7 @@ test('cached update remains actionable when the latest automatic check fails', a
       version: '1.2.0',
       published_at: '2026-09-04T00:00:00Z',
       release_url: releaseUrl,
-      manifest_url: 'https://github.com/Stravia-AI/StraviaPlatform/releases/download/v1.2.0/stravia-updater.json',
+      manifest_url: 'https://github.com/Strinova-AI/StrinovaPlatform/releases/download/v1.2.0/stravia-updater.json',
       download_available: true,
       download_error: null,
     },

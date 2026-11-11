@@ -383,7 +383,7 @@ async function copyProvider(): Promise<void> {
     >{m.model_changes_title()}</Button>
 {/snippet}
 
-<svelte:head><title>{m.common_model_services()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.common_model_services()} · Strinova</title></svelte:head>
 
 {#snippet providerPageActions()}
   <Button onclick={openCreate}><PlusIcon data-icon="inline-start" />{m.providers_add()}</Button>

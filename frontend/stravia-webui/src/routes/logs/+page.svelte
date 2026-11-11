@@ -234,7 +234,7 @@ async function downloadBundle(): Promise<void> {
 }
 </script>
 
-<svelte:head><title>{m.common_request_history()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.common_request_history()} · Strinova</title></svelte:head>
 
 <svelte:document
   onfullscreenchange={() => {

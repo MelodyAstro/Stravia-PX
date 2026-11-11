@@ -197,7 +197,7 @@ onMount(() => {
       else disconnectDesktopUpdates = disconnect
     } catch {
       // Product update integration is optional and must not hide an otherwise ready gateway.
-      console.warn('Stravia product update integration is unavailable')
+      console.warn('Strinova product update integration is unavailable')
     }
   }
 

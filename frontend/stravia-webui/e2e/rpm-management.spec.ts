@@ -136,7 +136,7 @@ const test = base.extend<{ management: { origin: string; setupToken: string } }>
           let text = ''
           const safeLog = () =>
             text
-              .replace(/(Stravia setup token:\s*)\S+/g, '$1[redacted]')
+              .replace(/(Strinova setup token:\s*)\S+/g, '$1[redacted]')
               .replace(/((?:setup_)?token=)[^&\s]+/g, '$1[redacted]')
           const deadline = setTimeout(() => finish(new Error(`Server readiness timed out: ${safeLog()}`)), 45_000)
           const finish = (error?: Error, token?: string) => {
@@ -150,8 +150,8 @@ const test = base.extend<{ management: { origin: string; setupToken: string } }>
           }
           const onData = (chunk: Buffer) => {
             text += stripVTControlCharacters(chunk.toString())
-            const token = /Stravia setup token:\s*(\S+)/.exec(text)?.[1]
-            const port = /Stravia Server listening[^\n]*127\.0\.0\.1:(\d+)/.exec(text)?.[1]
+            const token = /Strinova setup token:\s*(\S+)/.exec(text)?.[1]
+            const port = /Strinova Server listening[^\n]*127\.0\.0\.1:(\d+)/.exec(text)?.[1]
             if (token && port) {
               backendPort = Number(port)
               finish(undefined, token)

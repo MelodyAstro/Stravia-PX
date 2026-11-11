@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/static/tauri/tauri.conf.json",
-  "productName": "Stravia",
+  "productName": "Strinova",
   "version": "0.6.4",
   "identifier": "cn.stravia.agent-infra",
   "build": {
@@ -22,7 +22,7 @@
         "label": "main",
         "create": false,
         "dragDropEnabled": false,
-        "title": "Stravia Agent infra",
+        "title": "Strinova Agent infra",
         "width": 1440,
         "height": 900,
         "minWidth": 900,

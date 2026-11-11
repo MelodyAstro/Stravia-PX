@@ -123,7 +123,7 @@ async function syncModels(id = providerId): Promise<ProviderModelSyncSummary | u
 </script>
 
 <svelte:head
-  ><title>{provider ? provider.name.trim() || provider.id : m.common_model_service()} · Stravia</title></svelte:head>
+  ><title>{provider ? provider.name.trim() || provider.id : m.common_model_service()} · Strinova</title></svelte:head>
 
 {#if providersQuery.isPending}
   <div class="grid min-h-72 place-items-center"><Spinner /></div>

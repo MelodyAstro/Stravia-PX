@@ -201,7 +201,7 @@ function manageResource(path: '/models' | '/api-keys', createKey = false): void 
 }
 </script>
 
-<svelte:head><title>{m.connect_connect_apps()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.connect_connect_apps()} · Strinova</title></svelte:head>
 
 {#snippet keyActions(selected: boolean)}
   <div class="flex flex-wrap gap-2">

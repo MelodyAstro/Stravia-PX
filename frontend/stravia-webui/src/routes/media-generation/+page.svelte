@@ -153,7 +153,7 @@ async function unlinkRoute(): Promise<void> {
 }
 </script>
 
-<svelte:head><title>{m.media_generation_title()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.media_generation_title()} · Strinova</title></svelte:head>
 
 <div class="route-page route-page-column">
   <PageHeader title={m.media_generation_title()} />

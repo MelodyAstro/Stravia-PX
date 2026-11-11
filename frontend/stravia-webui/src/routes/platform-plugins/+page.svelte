@@ -189,7 +189,7 @@ function hookLabel(hook: string): string {
   </Button>
 {/snippet}
 
-<svelte:head><title>{m.platform_plugins_title()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.platform_plugins_title()} · Strinova</title></svelte:head>
 
 <div class="route-page platform-plugins-page">
   <PageHeader title={m.platform_plugins_title()} actions={listEmpty ? undefined : pageActions} />

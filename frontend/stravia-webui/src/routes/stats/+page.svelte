@@ -608,7 +608,7 @@ function retryAll(): void {
 }
 </script>
 
-<svelte:head><title>{m.stats_usage()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.stats_usage()} · Strinova</title></svelte:head>
 
 {#snippet rangeAction()}
   <TimeWindowControls

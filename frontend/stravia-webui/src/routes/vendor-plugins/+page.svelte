@@ -647,7 +647,7 @@ function networkPermissionContext(permission: PluginNetworkPermission): string[]
   <div class="flex flex-wrap items-center justify-end gap-2">{@render pluginActions(context.row.original)}</div>
 {/snippet}
 
-<svelte:head><title>{m.vendor_plugins_title()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.vendor_plugins_title()} · Strinova</title></svelte:head>
 
 <svelte:window ondragover={guardFileDragDefault} ondrop={guardFileDragDefault} />
 

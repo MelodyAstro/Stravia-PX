@@ -308,7 +308,7 @@ function selectMatch(match: CredentialMatch): void {
 }
 </script>
 
-<svelte:head><title>{m.reversible_redaction_title()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.reversible_redaction_title()} · Strinova</title></svelte:head>
 
 {#snippet pageActions()}
   <Button

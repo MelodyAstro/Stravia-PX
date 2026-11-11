@@ -40,7 +40,7 @@ async function returnToApiKeys(): Promise<void> {
 }
 </script>
 
-<svelte:head><title>{apiKey ? apiKey.name.trim() || apiKey.id : m.common_api_key()} · Stravia</title></svelte:head>
+<svelte:head><title>{apiKey ? apiKey.name.trim() || apiKey.id : m.common_api_key()} · Strinova</title></svelte:head>
 
 {#if apiKeysQuery.isPending || modelsQuery.isPending}
   <div class="grid min-h-72 place-items-center"><Spinner /></div>

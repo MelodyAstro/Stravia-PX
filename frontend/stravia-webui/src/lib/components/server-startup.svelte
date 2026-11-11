@@ -11,7 +11,7 @@ const failed = $derived(state.status === 'failed' || connectionError)
 </script>
 
 <main class="flex min-h-svh min-w-0 flex-col bg-background p-4 text-foreground sm:p-8" data-testid="server-startup">
-  <div class="flex items-center gap-2" aria-label="Stravia">
+  <div class="flex items-center gap-2" aria-label="Strinova">
     <BrandMark class="size-6" />
     <BrandWordmark class="text-sm" />
   </div>

@@ -22,7 +22,7 @@ const routeQuery = createQuery(() => ({
 const model = $derived(routeQuery.data)
 </script>
 
-<svelte:head><title>{model ? effectiveModelDisplayName(model) : m.common_model()} · Stravia</title></svelte:head>
+<svelte:head><title>{model ? effectiveModelDisplayName(model) : m.common_model()} · Strinova</title></svelte:head>
 
 {#if providersQuery.isPending || routeQuery.isPending}
   <div class="grid min-h-72 place-items-center"><Spinner /></div>

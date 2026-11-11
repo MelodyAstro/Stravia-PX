@@ -94,7 +94,7 @@ test('Login switches language without navigation or losing form state', async ({
   await page.getByRole('button', { name: 'Language', exact: true }).click()
   await page.getByRole('option', { name: '简体中文' }).click()
 
-  await expect(page.getByRole('heading', { name: '登录 Stravia' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '登录 Strinova' })).toBeVisible()
   await expect(page.getByText('用户名或密码错误。', { exact: true })).toBeVisible()
   await expect(page.locator('[aria-label="语言"]')).toBeVisible()
   await expect(page.getByLabel('用户名')).toHaveValue('draft-admin')

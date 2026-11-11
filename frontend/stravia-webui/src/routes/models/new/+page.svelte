@@ -16,7 +16,7 @@ const initialProviderId = $derived(page.url.searchParams.get('provider') ?? '')
 const initialModelId = $derived(page.url.searchParams.get('model') ?? '')
 </script>
 
-<svelte:head><title>{m.common_add_model()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.common_add_model()} · Strinova</title></svelte:head>
 
 {#if providersQuery.isPending}
   <div class="grid min-h-72 place-items-center"><Spinner /></div>

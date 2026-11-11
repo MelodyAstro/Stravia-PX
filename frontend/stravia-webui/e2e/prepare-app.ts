@@ -9,7 +9,7 @@ const codexManualInput = {
   secret: false,
 } as const
 
-const basePlugin = { id: 'base', name: 'Stravia Base Providers' }
+const basePlugin = { id: 'base', name: 'Strinova Base Providers' }
 
 const providerDescriptors = [
   {

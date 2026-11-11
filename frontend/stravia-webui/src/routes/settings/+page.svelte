@@ -53,7 +53,7 @@ $effect(() => {
 })
 </script>
 
-<svelte:head><title>{groupTitle} · {m.settings_settings()} · Stravia</title></svelte:head>
+<svelte:head><title>{groupTitle} · {m.settings_settings()} · Strinova</title></svelte:head>
 
 <div class="route-page route-page-column settings-page">
   <PageHeader title={m.settings_settings()} />

@@ -134,7 +134,7 @@ async function unusedPort(): Promise<number> {
   return port
 }
 
-describe('Stravia desktop smoke', () => {
+describe('Strinova desktop smoke', () => {
   before(async () => {
     await browser.tauri.switchWindow('main')
     await $('a[href="/vendor-plugins"]').waitForExist({ timeout: 180_000 })
@@ -1020,12 +1020,12 @@ describe('Stravia desktop smoke', () => {
     await expect($('[role="progressbar"]')).toHaveAttribute('aria-valuenow', '50')
     await expect($('button=Pause')).not.toExist()
     await expect($('button=Cancel')).not.toExist()
-    await expect($('[data-slot="dialog-title"]')).toHaveText('Install Stravia 9.9.9?')
+    await expect($('[data-slot="dialog-title"]')).toHaveText('Install Strinova 9.9.9?')
     await expect($('[data-slot="dialog-content"]').$('button=Exit and install')).toBeEnabled()
     await (await $('[data-slot="dialog-content"]')).$('button=Close').click()
     await expect($('[data-slot="dialog-title"]')).not.toExist()
     await $('button=Exit and install').click()
-    await expect($('[data-slot="dialog-title"]')).toHaveText('Install Stravia 9.9.9?')
+    await expect($('[data-slot="dialog-title"]')).toHaveText('Install Strinova 9.9.9?')
     await (await $('[data-slot="dialog-content"]')).$('button=Exit and install').click()
     await browser.waitUntil(
       async () => {
@@ -1202,7 +1202,7 @@ describe('Stravia desktop smoke', () => {
           const providers = writtenConfig.model_providers
           return typeof providers === 'object' && providers !== null && 'stravia' in providers
         },
-        { timeout: 10_000, timeoutMsg: 'Codex configuration did not receive the Stravia provider' },
+        { timeout: 10_000, timeoutMsg: 'Codex configuration did not receive the Strinova provider' },
       )
 
       expect(writtenConfig).toMatchObject({

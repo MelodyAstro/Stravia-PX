@@ -227,7 +227,7 @@ async function deleteKey(): Promise<void> {
 }
 </script>
 
-<svelte:head><title>{m.api_keys_api_keys()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.api_keys_api_keys()} · Strinova</title></svelte:head>
 
 {#snippet createKeyAction()}
   <Button onclick={openCreate}><PlusIcon data-icon="inline-start" />{m.common_create_api_key()}</Button>

@@ -131,7 +131,7 @@ async function complete(): Promise<void> {
 }
 </script>
 
-<svelte:head><title>{m.setup_title()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.setup_title()} · Strinova</title></svelte:head>
 
 <main class="bg-background p-4 sm:p-8">
   <div class="mx-auto flex w-full max-w-3xl flex-col gap-8">

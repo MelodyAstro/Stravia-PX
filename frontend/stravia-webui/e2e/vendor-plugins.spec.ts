@@ -9,7 +9,7 @@ test('an unavailable bundled plugin can be restored without importing a replacem
   await prepareApp(page)
   let plugin: PluginSummary = {
     vendor_id: 'base',
-    name: 'Stravia Base Providers',
+    name: 'Strinova Base Providers',
     version: '0.3.0',
     source: 'builtin',
     status: 'unavailable',
@@ -23,7 +23,7 @@ test('an unavailable bundled plugin can be restored without importing a replacem
     id: 'restore-bundled-component',
     vendor_id: 'base',
     name: plugin.name,
-    author: 'Stravia',
+    author: 'Strinova',
     previous_version: plugin.version,
     new_version: '0.3.0',
     target_source: 'builtin',
@@ -79,7 +79,7 @@ test('an unavailable dedicated bundled plugin can be cancelled, retried, and uni
   await prepareApp(page)
   const basePlugin: PluginSummary = {
     vendor_id: 'base',
-    name: 'Stravia Base Providers',
+    name: 'Strinova Base Providers',
     version: '0.3.0',
     source: 'builtin',
     status: 'ready',
@@ -167,7 +167,7 @@ test('an unavailable dedicated bundled plugin can be cancelled, retried, and uni
 
 const readyBase: PluginSummary = {
   vendor_id: 'base',
-  name: 'Stravia Base Providers',
+  name: 'Strinova Base Providers',
   version: '0.3.0',
   source: 'builtin',
   status: 'ready',

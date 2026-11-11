@@ -200,8 +200,8 @@ test('HTTP management and HTTPS proxy sessions retain browser cookie boundaries'
       const deadline = setTimeout(() => reject(new Error('Server did not become ready')), 45_000)
       const onData = (chunk: Buffer) => {
         text += chunk.toString()
-        token = /Stravia setup token:\s*(\S+)/.exec(text)?.[1] ?? token
-        const address = /Stravia Server listening[^\n]*127\.0\.0\.1:(\d+)/.exec(stripVTControlCharacters(text))
+        token = /Strinova setup token:\s*(\S+)/.exec(text)?.[1] ?? token
+        const address = /Strinova Server listening[^\n]*127\.0\.0\.1:(\d+)/.exec(stripVTControlCharacters(text))
         if (address && token) {
           backendPort = Number(address[1])
           clearTimeout(deadline)

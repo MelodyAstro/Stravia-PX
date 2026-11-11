@@ -74,7 +74,7 @@ function lastModel(item: ConsoleConversation) {
 }
 </script>
 
-<svelte:head><title>{m.console_chat_all()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.console_chat_all()} · Strinova</title></svelte:head>
 {#snippet pageActions()}<Button href={resolve('/')}>{m.console_chat_new()}</Button><ConsoleChatActions
     clearAll />{/snippet}
 {#snippet titleCell(context: DataTableCellContext<ConsoleConversation>)}

@@ -9,7 +9,7 @@ export function prepareDesktopDriver(): void {
   if (process.platform !== 'win32') throw new Error('Native desktop smoke requires Windows and WebView2')
   const localAppData = process.env.LOCALAPPDATA
   if (!localAppData) throw new Error('LOCALAPPDATA is required for the per-user desktop driver cache')
-  const cacheRoot = join(localAppData, 'Stravia', 'test-tools', 'msedgedriver')
+  const cacheRoot = join(localAppData, 'Strinova', 'test-tools', 'msedgedriver')
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'

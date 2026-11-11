@@ -18,7 +18,7 @@ function retry(): void {
 }
 </script>
 
-<svelte:head><title>{m.error_page_unavailable()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.error_page_unavailable()} · Strinova</title></svelte:head>
 
 <main class="grid place-items-center p-4 sm:p-8">
   <section class="flex w-full max-w-2xl min-w-0 flex-col gap-4" aria-labelledby="error-title">

@@ -132,7 +132,7 @@ onMount(() => {
     ondblclick={(event) => windowChrome.toggleMaximize(event)}>
     <div
       class={['flex min-w-0 items-center gap-2 px-2', windowChrome.controls === 'native' ? 'ps-20' : '']}
-      aria-label="Stravia 观策行">
+      aria-label="Strinova">
       <BrandMark class="size-6" state={startup.status === 'starting' ? 'running' : 'static'} />
       <BrandWordmark class="text-sm" />
     </div>

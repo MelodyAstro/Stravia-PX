@@ -1592,7 +1592,7 @@ test.describe('matching test', () => {
 
     await page.setViewportSize({ width: 390, height: 800 })
     const action = await box(page.getByRole('button', { name: 'Test matching', exact: true }))
-    const flow = page.getByText('Test text is sent only to this Stravia instance, not to model providers.')
+    const flow = page.getByText('Test text is sent only to this Strinova instance, not to model providers.')
     await expect(flow).toBeVisible()
     const narrowInput = await box(input)
     const narrowResults = await box(results)

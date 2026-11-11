@@ -213,7 +213,7 @@ async function deleteModel(): Promise<void> {
 }
 </script>
 
-<svelte:head><title>{m.common_models()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.common_models()} · Strinova</title></svelte:head>
 
 {#snippet addModelAction()}
   <Button href="/models/new" disabled={providers.length === 0 || providersQuery.isPending}>

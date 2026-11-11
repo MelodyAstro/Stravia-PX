@@ -66,8 +66,8 @@ test('real backend records discovery, manual policy, failure and retained delete
     const timeout = setTimeout(() => reject(new Error('Isolated server did not become ready')), 45_000)
     const receive = (chunk: Buffer) => {
       logs += stripVTControlCharacters(chunk.toString())
-      const token = /Stravia setup token:\s*(\S+)/.exec(logs)?.[1]
-      const port = /(?:Stravia Server listening|startup listener opened)[^\n]*127\.0\.0\.1:(\d+)/.exec(logs)?.[1]
+      const token = /Strinova setup token:\s*(\S+)/.exec(logs)?.[1]
+      const port = /(?:Strinova Server listening|startup listener opened)[^\n]*127\.0\.0\.1:(\d+)/.exec(logs)?.[1]
       if (token && port) {
         clearTimeout(timeout)
         done({ origin: `http://127.0.0.1:${port}`, token })

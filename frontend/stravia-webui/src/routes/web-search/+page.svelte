@@ -209,7 +209,7 @@ function rangeValidator(min: number, max: number): (draft: string) => string | n
 }
 </script>
 
-<svelte:head><title>{m.web_search_title()} · Stravia</title></svelte:head>
+<svelte:head><title>{m.web_search_title()} · Strinova</title></svelte:head>
 
 <div class="route-page route-page-column">
   <PageHeader title={m.web_search_title()} />

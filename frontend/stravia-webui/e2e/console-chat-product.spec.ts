@@ -210,8 +210,8 @@ test('real gateway accepts original images and persisted reasoning replay under 
     const timeout = setTimeout(() => reject(new Error(`Isolated server readiness timed out: ${logs}`)), 45_000)
     const receive = (chunk: Buffer) => {
       logs += stripVTControlCharacters(chunk.toString())
-      const token = /Stravia setup token:\s*(\S+)/.exec(logs)?.[1]
-      const port = /(?:Stravia Server listening|startup listener opened)[^\n]*127\.0\.0\.1:(\d+)/.exec(logs)?.[1]
+      const token = /Strinova setup token:\s*(\S+)/.exec(logs)?.[1]
+      const port = /(?:Strinova Server listening|startup listener opened)[^\n]*127\.0\.0\.1:(\d+)/.exec(logs)?.[1]
       if (token && port) {
         clearTimeout(timeout)
         resolve({ origin: `http://127.0.0.1:${port}`, token })

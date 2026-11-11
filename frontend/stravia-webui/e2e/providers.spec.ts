@@ -295,7 +295,7 @@ test('service cards filter sign-in methods and use host logos before letter fall
   const descriptors = [
     {
       provider_id: 'openai',
-      plugin: { id: 'base', name: 'Stravia Base Providers' },
+      plugin: { id: 'base', name: 'Strinova Base Providers' },
       catalog_id: 'openai',
       display_name: 'OpenAI',
       description: 'OpenAI API connections.',
@@ -383,7 +383,7 @@ test('service cards filter sign-in methods and use host logos before letter fall
 
   const search = page.locator('[data-provider-toolbar] input')
   // 内置 base 的卡片不重复标注来源；外部插件的入口保留来源名称与 ID。
-  await expect(openAi).not.toContainText('Stravia Base Providers')
+  await expect(openAi).not.toContainText('Strinova Base Providers')
   await expect(codex).toContainText('插件：OpenAI Codex（openai-codex）')
   await search.fill('账号')
   await expect(grid.getByRole('button')).toHaveCount(1)
@@ -2401,7 +2401,7 @@ test('Provider detail separates connection, inventory, references, and guarded m
     .click()
   await page.getByRole('button', { name: 'Model actions' }).click()
   await page.getByRole('menuitem', { name: 'Remove manually added model…' }).click()
-  await expect(page.getByText('Stravia could not check where this model is used.')).toBeVisible()
+  await expect(page.getByText('Strinova could not check where this model is used.')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Remove from list' })).toBeDisabled()
 })
 

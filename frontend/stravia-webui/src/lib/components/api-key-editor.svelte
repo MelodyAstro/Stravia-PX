@@ -365,7 +365,7 @@ async function saveKey(): Promise<void> {
       {/snippet}
     </SettingRow>
     {#if !allowAllModels}
-      <SettingRow title={m.api_key_editor_allowed_models()} layout="stacked" nested>
+      <SettingRow title={m.api_key_editor_allowed_models()} layout="stacked" class="rounded-xl border p-4">
         <Popover.Root bind:open={modelPickerOpen}>
           <Popover.Trigger>
             {#snippet child({ props })}

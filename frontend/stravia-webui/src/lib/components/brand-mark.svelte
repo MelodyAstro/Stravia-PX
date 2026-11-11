@@ -10,7 +10,7 @@ interface Props {
   state?: 'static' | 'launch' | 'running' | 'complete'
 }
 
-let { class: className, label = 'Stravia 观策行', state: motionState = 'static' }: Props = $props()
+let { class: className, label = 'Strinova', state: motionState = 'static' }: Props = $props()
 let visible = $state(true)
 
 onMount(() => {
