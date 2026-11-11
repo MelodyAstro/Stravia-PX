@@ -29,7 +29,8 @@ jobs:
       - run: task prepare:crates
       - name: Resolve lockfile with Cargo and format Rust
         run: |
-          cargo metadata --no-deps --format-version 1 > /dev/null
+          cargo update --workspace
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
           cargo fmt --all
           mkdir -p prepared
           git diff --binary -- Cargo.lock Cargo.toml backend > prepared/source.patch
