@@ -86,9 +86,7 @@ jobs:
           python3 px/ops/package-ci-native.py --verify-source-only
 
       - name: Install native build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config libssl-dev
+        run: bash px/ops/ci-native-deps.sh
 
       - name: Set up pinned Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
