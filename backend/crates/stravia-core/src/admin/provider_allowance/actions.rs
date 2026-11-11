@@ -47,6 +47,19 @@ fn receipt_key(
 }
 
 impl AdminService {
+    pub async fn account_budget(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<crate::account_usage::AccountBudgetView> {
+        self.gw.account_budget(id).await
+    }
+    pub async fn set_account_budget(
+        &self,
+        id: &str,
+        input: crate::account_usage::AccountBudgetInput,
+    ) -> anyhow::Result<crate::account_usage::AccountBudgetView> {
+        self.gw.set_account_budget(id, input).await
+    }
     pub async fn provider_reset_state(&self, id: &str) -> anyhow::Result<ManualResetState> {
         self.get_provider(id).await?;
         let context = VendorCallContext::new(

@@ -13,7 +13,6 @@ use stravia_vendor_sdk::{OperationOutput, ProviderSnapshot};
 
 use crate::{
     Gateway,
-    admin::AdminService,
     plugin::{VendorCallContext, VendorRequest},
     storage::{DynStorage, traits::SettingsStore},
 };
@@ -43,6 +42,7 @@ pub struct AccountBudgetView {
     pub reserved: String,
     pub uncertain_spend: String,
     pub pending: usize,
+    pub unpriced_requests: u64,
     pub revision: u64,
     pub since: Option<String>,
     pub estimated: bool,
@@ -54,6 +54,8 @@ struct Ledger {
     limit: Option<u64>,
     spent: u64,
     uncertain_spend: u64,
+    #[serde(default)]
+    unpriced_requests: u64,
     reservations: BTreeMap<String, u64>,
     revision: u64,
     #[serde(default)]
@@ -69,6 +71,19 @@ impl Ledger {
         })
     }
     fn reserve(&mut self, id: &str, amount: u64) -> anyhow::Result<()> {
+        if self.limit.is_none() && self.reservations.len() >= MAX_PENDING {
+            // Bound the journal without refunding unresolved calls.
+            let unresolved = self.reserved()?;
+            self.spent = self
+                .spent
+                .checked_add(unresolved)
+                .context("Account spend overflow")?;
+            self.uncertain_spend = self
+                .uncertain_spend
+                .checked_add(unresolved)
+                .context("Account spend overflow")?;
+            self.reservations.clear();
+        }
         ensure!(
             self.reservations.len() < MAX_PENDING,
             "Account has too many unresolved requests"
@@ -114,6 +129,7 @@ impl Ledger {
             reserved: display(self.reserved()?),
             uncertain_spend: display(self.uncertain_spend),
             pending: self.reservations.len(),
+            unpriced_requests: self.unpriced_requests,
             revision: self.config_revision,
             since: (!self.since.is_empty()).then(|| self.since.clone()),
             estimated: true,
@@ -156,7 +172,11 @@ pub(crate) fn account_key(provider: &ProviderSnapshot) -> anyhow::Result<(String
         .filter(|s| !s.trim().is_empty())
         .context("Verified upstream account identity is unavailable")?;
     let digest = Sha256::digest(format!("{}\0{}", provider.provider_id, account.trim()));
-    Ok((format!("{SETTING_PREFIX}{digest:x}"), unit))
+    let digest = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok((format!("{SETTING_PREFIX}{digest}"), unit))
 }
 
 async fn load(store: &dyn SettingsStore, key: &str) -> anyhow::Result<(Option<String>, Ledger)> {
@@ -191,9 +211,9 @@ async fn mutate<T>(
     anyhow::bail!("Account spend ledger is busy; retry later")
 }
 
-impl AdminService {
+impl Gateway {
     async fn account_budget_identity(&self, id: &str) -> anyhow::Result<(String, &'static str)> {
-        self.get_provider(id).await?;
+        self.admin().get_provider(id).await?;
         let context = VendorCallContext::new(
             Default::default(),
             stravia_runtime_contract::Deadline::fixed(
@@ -201,23 +221,22 @@ impl AdminService {
             ),
         );
         let prepared = self
-            .gw
             .prepare_vendor_execution(id, None, stravia_vendor_sdk::Operation::Allowance, &context)
             .await?;
         account_key(prepared.provider())
     }
-    pub async fn account_budget(&self, id: &str) -> anyhow::Result<AccountBudgetView> {
+    pub(crate) async fn account_budget(&self, id: &str) -> anyhow::Result<AccountBudgetView> {
         let (key, unit) = self.account_budget_identity(id).await?;
-        load(self.gw.storage.settings(), &key).await?.1.view(unit)
+        load(self.storage.settings(), &key).await?.1.view(unit)
     }
-    pub async fn set_account_budget(
+    pub(crate) async fn set_account_budget(
         &self,
         id: &str,
         input: AccountBudgetInput,
     ) -> anyhow::Result<AccountBudgetView> {
         let (key, unit) = self.account_budget_identity(id).await?;
         let limit = input.limit.as_deref().map(parse_limit).transpose()?;
-        mutate(self.gw.storage.settings(), &key, |ledger| {
+        mutate(self.storage.settings(), &key, |ledger| {
             ensure!(
                 ledger.config_revision == input.expected_revision,
                 "Account spend settings changed; refresh before saving"
@@ -233,7 +252,7 @@ impl AdminService {
             Ok(())
         })
         .await?;
-        load(self.gw.storage.settings(), &key).await?.1.view(unit)
+        load(self.storage.settings(), &key).await?.1.view(unit)
     }
 }
 
@@ -397,7 +416,10 @@ pub(crate) async fn reserve(
     let rate = match official_rate(provider) {
         Ok(rate) => rate,
         Err(error) if ledger.limit.is_some() => return Err(error),
-        Err(_) => return Ok(None),
+        Err(_) => {
+            record_unpriced(gateway.storage.settings(), &key).await?;
+            return Ok(None);
+        }
     };
     let context = provider
         .model_metadata
@@ -411,6 +433,7 @@ pub(crate) async fn reserve(
             ledger.limit.is_none(),
             "Account spend limit requires a verified model context bound"
         );
+        record_unpriced(gateway.storage.settings(), &key).await?;
         return Ok(None);
     };
     // Reserve both maximum input and maximum output. Cache counts can be
@@ -428,6 +451,21 @@ pub(crate) async fn reserve(
         rate,
         finished: false,
     }))
+}
+
+async fn record_unpriced(store: &dyn SettingsStore, key: &str) -> anyhow::Result<()> {
+    mutate(store, key, |ledger| {
+        ensure!(
+            ledger.limit.is_none(),
+            "Account spend limit was enabled while an unpriced request was being admitted"
+        );
+        ledger.unpriced_requests = ledger
+            .unpriced_requests
+            .checked_add(1)
+            .context("Unpriced account request count overflow")?;
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]

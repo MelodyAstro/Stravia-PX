@@ -2425,6 +2425,7 @@
   "account_reset_result_cooldown": "A reset cooldown is active",
   "account_reset_result_unavailable": "Reset is currently unavailable for this account",
   "account_budget_title": "Site cumulative spend (estimated)",
+  "account_budget_unpriced": "{count} requests could not be priced while the limit was off and are excluded from the estimate. Actual consumption may be higher.",
   "account_budget_summary": "Used: {spent} · Reserved: {reserved} {unit}",
   "account_budget_disabled": "Spend limit is off",
   "account_budget_limit_value": "Limit: {value} {unit}",

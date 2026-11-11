@@ -15,6 +15,18 @@ use stravia_runtime_contract::protocol::ids::{
 use stravia_runtime_contract::protocol::ir::{AiItem, AiRequest};
 
 #[test]
+fn account_spend_limit_reroutes_without_marking_an_upstream_failure() {
+    let error = anyhow::anyhow!("fixture accounting reason")
+        .context(crate::account_usage::AccountSpendDenied);
+    let failure = super::classify_vendor_error(error);
+    assert!(failure.try_next_target);
+    assert!(!failure.is_upstream());
+    assert_eq!(failure.error.code, "account_spend_limit");
+    assert_eq!(failure.diagnostic.status_code, Some(429));
+    assert!(failure.error.upstream_error_kind.is_none());
+}
+
+#[test]
 fn generation_session_affinity_isolates_principal_target_and_root() {
     let owner = stravia_runtime_contract::Principal::new("owner");
     let other = stravia_runtime_contract::Principal::new("other");

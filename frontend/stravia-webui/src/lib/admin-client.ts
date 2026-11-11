@@ -6,6 +6,7 @@ export interface AccountBudgetView {
   reserved: string
   uncertain_spend: string
   pending: number
+  unpriced_requests: number
   revision: number
   since: string | null
   estimated: boolean

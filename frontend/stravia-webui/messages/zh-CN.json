@@ -2416,6 +2416,7 @@
   "account_reset_result_cooldown": "重置正在冷却中",
   "account_reset_result_unavailable": "此账号当前无法重置",
   "account_budget_title": "本站累计消费（估算）",
+  "account_budget_unpriced": "上限关闭期间有 {count} 次请求无法计价，未计入估算，实际消费可能更高。",
   "account_budget_summary": "已使用：{spent} · 已预留：{reserved} {unit}",
   "account_budget_disabled": "消费上限已关闭",
   "account_budget_limit_value": "上限：{value} {unit}",

@@ -131,6 +131,7 @@ async function mockAllowances(page: Page, snapshots: AllowanceFixture[]) {
     await route.fulfill({
       json: {
         data: snapshots.map((snapshot) => ({
+          account_controls_supported: snapshot.account_controls_supported ?? false,
           provider_id: snapshot.provider_id,
           guard_supported: snapshot.guard_supported,
           suspension: snapshot.suspension,
@@ -145,6 +146,133 @@ async function mockAllowances(page: Page, snapshots: AllowanceFixture[]) {
   })
   return posts
 }
+
+test('account reset confirmation reuses the pending request id after an ambiguous result', async ({ page }) => {
+  const snapshot = {
+    ...freshSnapshot,
+    account_controls_supported: true,
+    allowances: [
+      ...freshSnapshot.allowances,
+      {
+        key: 'reset_credits',
+        guarded: false,
+        label: 'Available limit resets',
+        kind: 'request_allowance',
+        remaining: { value: 2, unit: 'resets' },
+        forecast: { status: 'unknown' },
+      },
+    ],
+  }
+  const posts = await mockAllowances(page, [snapshot])
+  let state: { request_id: string | null; pending: boolean; result: string | null } = {
+    request_id: null,
+    pending: false,
+    result: null,
+  }
+  const attempts: Array<{ request_id: string; confirmed: boolean }> = []
+  await page.route('**/api/v1/provider-allowances/provider-alpha/reset', async (route) => {
+    if (route.request().method() === 'POST') {
+      const input = route.request().postDataJSON() as { request_id: string; confirmed: boolean }
+      attempts.push(input)
+      state = {
+        request_id: input.request_id,
+        pending: attempts.length === 1,
+        result: attempts.length > 1 ? 'reset' : null,
+      }
+      if (attempts.length === 1) {
+        await route.fulfill({
+          status: 409,
+          json: { code: 'ACCOUNT_RESET_UNCONFIRMED', error: 'Reset result is not yet confirmed' },
+        })
+      } else {
+        await route.fulfill({ json: { data: { request_id: input.request_id, code: 'reset' } } })
+      }
+    } else await route.fulfill({ json: { data: state } })
+  })
+  await page.route('**/api/v1/provider-allowances/provider-alpha/budget', (route) =>
+    route.fulfill({ status: 409, json: { error: 'No budget configured' } }),
+  )
+  await page.goto('/allowances')
+  const provider = page.getByTestId('allowance-provider-provider-alpha')
+  await provider.getByRole('button', { name: 'Alpha account allowance details' }).click()
+  await expect(provider.getByRole('table').getByText('2 resets', { exact: true })).toBeVisible()
+  await expect(provider.getByRole('switch', { name: /Available limit resets/ })).toHaveCount(0)
+  await provider.getByRole('button', { name: 'Use one reset' }).click()
+  const dialog = page.getByRole('alertdialog')
+  await expect(dialog.getByText(/cannot be undone/)).toBeVisible()
+  expect(attempts).toHaveLength(0)
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  expect(attempts).toHaveLength(0)
+  await provider.getByRole('button', { name: 'Use one reset' }).click()
+  await dialog.getByRole('button', { name: 'Use one reset' }).click()
+  await expect(provider.getByText(/previous reset is unconfirmed/)).toBeVisible()
+  await dialog.getByRole('button', { name: 'Use one reset' }).click()
+  await expect(dialog).toBeHidden()
+  expect(attempts).toHaveLength(2)
+  expect(attempts[0].confirmed).toBe(true)
+  expect(attempts[0].request_id).toMatch(/^[0-9a-f-]{36}$/)
+  expect(attempts[1].request_id).toBe(attempts[0].request_id)
+  expect(posts.some((path) => path.endsWith('/refresh'))).toBe(true)
+})
+
+test('account estimated budget can be enabled and disabled without clearing spend on narrow screens', async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 375, height: 900 })
+  await page.addInitScript(() => localStorage.setItem('stravia-locale', 'zh-CN'))
+  await mockAllowances(page, [{ ...freshSnapshot, account_controls_supported: true }])
+  let budget = {
+    unit: 'credits',
+    limit: null as string | null,
+    spent: '1.25',
+    reserved: '0.5',
+    uncertain_spend: '0',
+    pending: 1,
+    revision: 0,
+    since: '2026-11-11T00:00:00Z',
+    estimated: true,
+    rate_date: '2026-11-11',
+  }
+  const writes: Array<{ limit: string | null; expected_revision: number }> = []
+  await page.route('**/api/v1/provider-allowances/provider-alpha/budget', async (route) => {
+    if (route.request().method() === 'PUT') {
+      const input = route.request().postDataJSON() as { limit: string | null; expected_revision: number }
+      writes.push(input)
+      budget = { ...budget, limit: input.limit, revision: budget.revision + 1 }
+    }
+    await route.fulfill({ json: { data: budget } })
+  })
+  await page.route('**/api/v1/provider-allowances/provider-alpha/reset', (route) =>
+    route.fulfill({ json: { data: { request_id: null, pending: false, result: null } } }),
+  )
+  await page.goto('/allowances')
+  const provider = page.getByTestId('allowance-provider-provider-alpha')
+  await provider.getByRole('button', { name: 'Alpha account 额度详情' }).click()
+  const control = provider.getByRole('region', { name: '本站累计消费（估算）' })
+  await expect(control.getByText('消费上限已关闭')).toBeVisible()
+  await control.getByRole('button', { name: '设置上限' }).click()
+  await control.getByRole('switch', { name: '限制此账号经本站产生的消费' }).click()
+  await control.getByLabel('累计上限（credits）', { exact: true }).fill('12.5')
+  await expect(control.getByText(/官方费率日期/)).toBeVisible()
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme })
+    await control.scrollIntoViewIfNeeded()
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    )
+    expect(overflow).toBeLessThanOrEqual(0)
+    await page.screenshot({ path: testInfo.outputPath(`account-controls-${colorScheme}.png`) })
+  }
+  await control.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(control.getByText('上限：12.5 credits')).toBeVisible()
+  expect(writes[0]).toEqual({ limit: '12.5', expected_revision: 0 })
+  await control.getByRole('button', { name: '设置上限' }).click()
+  await control.getByRole('switch', { name: '限制此账号经本站产生的消费' }).click()
+  await control.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(control.getByText('消费上限已关闭')).toBeVisible()
+  await expect(control.getByTestId('account-budget-summary')).toContainText('1.25')
+  expect(writes[1]).toEqual({ limit: null, expected_revision: 1 })
+})
 
 async function selectFilter(page: Page, label: string, option: string): Promise<void> {
   await page.getByRole('button', { name: label, exact: true }).click()

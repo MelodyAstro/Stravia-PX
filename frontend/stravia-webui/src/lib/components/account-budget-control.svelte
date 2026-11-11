@@ -71,6 +71,9 @@ async function save(event: SubmitEvent): Promise<void> {
       >{m.account_budget_edit()}</Button>
   </div>
   <p class="text-xs leading-relaxed text-muted-foreground">{m.account_budget_scope()}</p>
+  {#if budget.data && budget.data.unpriced_requests > 0}
+    <p class="text-xs text-muted-foreground" role="status">{m.account_budget_unpriced({ count: budget.data.unpriced_requests })}</p>
+  {/if}
   {#if budget.data && budget.data.uncertain_spend !== '0'}
     <p class="text-xs text-muted-foreground" role="status">
       {m.account_budget_uncertain({ value: budget.data.uncertain_spend, unit: budget.data.unit })}

@@ -63,7 +63,10 @@ The pinned official rate card was checked on **2026-11-11** against
 It includes documented speed, long-context and cache-write premiums
 conservatively; cached token categories may be counted again where protocols
 report them separately. Do not substitute API dollar prices for Codex credits.
-New or unpriced models fail closed while a cap is enabled. Rate-card changes
+New or unpriced models fail closed while a cap is enabled. When the cap is off,
+unpriced requests are counted separately rather than recorded as zero-cost.
+A concurrently enabled cap prevents an unpriced request from committing its
+accounting admission. Rate-card changes
 should be reviewed and shipped through CI; GPT-5.6 Sol's published promotion is
 currently guaranteed only through November 21, 2026.
 

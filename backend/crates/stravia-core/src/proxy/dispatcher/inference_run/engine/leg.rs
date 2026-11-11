@@ -71,6 +71,7 @@ impl LegFailure {
                     _ => {
                         let status = model_turn_error_status(error).as_u16();
                         match error.code.as_str() {
+                            "account_spend_limit" => (AiErrorKind::QuotaExceeded, Some(status)),
                             "protocol_lossy_rejected" | "STRAVIA_PROTOCOL_LOSSY_REJECTED" => {
                                 (AiErrorKind::InvalidRequest, Some(status))
                             }

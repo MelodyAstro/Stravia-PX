@@ -183,7 +183,7 @@ test.describe('touch help', () => {
   })
 })
 
-test('API Key editor groups and filters allowed model selections', async ({ page }) => {
+test('API Key editor groups and filters allowed model selections', async ({ page }, testInfo) => {
   const modelId = '4d93a8ac-0d1f-4891-8780-55c2f566c084'
   const secondModelId = 'd414f418-547e-4269-b917-fec9a10c39bb'
   const modelName = 'gpt-5.6-sol'
@@ -260,7 +260,12 @@ test('API Key editor groups and filters allowed model selections', async ({ page
     await page.setViewportSize({ width, height: 900 })
     const frame = await modelScope.evaluate((element) => {
       const style = getComputedStyle(element)
-      return { borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth], radius: style.borderTopLeftRadius, width: element.clientWidth, scrollWidth: element.scrollWidth }
+      return {
+        borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
+        radius: style.borderTopLeftRadius,
+        width: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }
     })
     expect(frame.borders).toEqual(['1px', '1px', '1px', '1px'])
     expect(parseFloat(frame.radius)).toBeGreaterThanOrEqual(8)
@@ -268,6 +273,11 @@ test('API Key editor groups and filters allowed model selections', async ({ page
   }
   await page.setViewportSize({ width: 544, height: 832 })
   await expect(modelPicker).toContainText('Allowed: 2')
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme })
+    await modelScope.screenshot({ path: testInfo.outputPath(`allowed-models-${colorScheme}.png`) })
+  }
+  await page.emulateMedia({ colorScheme: 'light' })
   await modelPicker.click()
   const modelMenu = page.locator('[data-slot="popover-content"]')
   const modelSearch = modelMenu.getByPlaceholder('Search models…')

@@ -33,16 +33,13 @@ pub fn claude(payload: &Value, now_ms: i64) -> Option<AllowanceItem> {
     let mut count = 0u64;
     let mut expiry = None;
     for grant in grants {
-        let Some(left) = grant["resets_left"].as_u64() else {
-            continue;
-        };
-        let Some(total) = grant["resets_total"].as_u64() else {
-            continue;
-        };
-        let Some(paused) = grant["paused"].as_bool() else {
-            continue;
-        };
-        if left > total || paused || left == 0 {
+        let left = grant["resets_left"].as_u64()?;
+        let total = grant["resets_total"].as_u64()?;
+        let paused = grant["paused"].as_bool()?;
+        if left > total {
+            return None;
+        }
+        if paused || left == 0 {
             continue;
         }
         let parse = |key: &str| -> Option<Option<i64>> {
@@ -55,9 +52,7 @@ pub fn claude(payload: &Value, now_ms: i64) -> Option<AllowanceItem> {
                 )),
             }
         };
-        let (Some(start), Some(end)) = (parse("starts_at"), parse("ends_at")) else {
-            continue;
-        };
+        let (start, end) = (parse("starts_at")?, parse("ends_at")?);
         if start.is_some_and(|start| start > now_ms) || end.is_some_and(|end| end <= now_ms) {
             continue;
         }
@@ -82,8 +77,7 @@ mod tests {
         let payload = json!({"cedar_ember":{"eligible":true,"grants":[
             {"id":"PRIVATE-GRANT","resets_left":2,"resets_total":2,"paused":false,"starts_at":null,"ends_at":null},
             {"resets_left":1,"resets_total":1,"paused":true,"starts_at":null,"ends_at":null},
-            {"resets_left":1,"resets_total":1,"paused":false,"starts_at":null,"ends_at":"2020-01-01T00:00:00Z"},
-            {"resets_left":-1,"resets_total":1,"paused":false,"starts_at":null,"ends_at":null}
+            {"resets_left":1,"resets_total":1,"paused":false,"starts_at":null,"ends_at":"2020-01-01T00:00:00Z"}
         ]}});
         let inventory = claude(&payload, now).unwrap();
         assert_eq!(inventory.remaining.as_ref().unwrap().value, "2");
@@ -93,6 +87,7 @@ mod tests {
                 .contains("PRIVATE-GRANT")
         );
         assert!(claude(&json!({}), now).is_none());
+        assert!(claude(&json!({"cedar_ember":{"eligible":true,"grants":[{"resets_left":-1,"resets_total":1,"paused":false,"starts_at":null,"ends_at":null}]}}),now).is_none());
         assert!(claude(&json!({"cedar_ember":{"eligible":false,"grants":[]}}), now).is_none());
     }
 }
