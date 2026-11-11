@@ -26,6 +26,41 @@ fn request_models_are_exact_single_hop_and_disabled_by_default() {
 }
 
 #[test]
+fn capture_distinguishes_client_versions_and_request_budgets_without_bodies() {
+    let store = CaptureStore::default();
+    store.set("key", true).unwrap();
+    let mut request = AiRequest::new("gpt", Vec::new());
+    request.generation.max_tokens = Some(32768);
+    request.reasoning.budget_tokens = Some(8192);
+    let envelope = RawEnvelope::new(
+        Some(serde_json::json!({"input":"PRIVATE-CHAT"})),
+        HashMap::from([
+            (
+                "user-agent".into(),
+                "codex_cli_rs/0.167.0 (Linux; x86_64)".into(),
+            ),
+            ("authorization".into(), "Bearer PRIVATE-TOKEN".into()),
+        ]),
+        "POST",
+        "/responses",
+    );
+    store.observe("key", "open-responses", &envelope, &request);
+    request.generation.max_tokens = Some(65536);
+    store.observe("key", "open-responses", &envelope, &request);
+    let view = store.view("key");
+    assert_eq!(view.samples.len(), 2);
+    assert_eq!(view.samples[0].client.family, "codex");
+    assert_eq!(
+        view.samples[0].parameters.thinking_budget_tokens,
+        Some(8192)
+    );
+    assert_eq!(view.samples[0].parameters.max_output_tokens, Some(32768));
+    let encoded = serde_json::to_string(&view).unwrap();
+    assert!(!encoded.contains("PRIVATE-CHAT"));
+    assert!(!encoded.contains("PRIVATE-TOKEN"));
+}
+
+#[test]
 fn request_models_reject_duplicates_invalid_names_and_unbounded_config() {
     let mut config = RequestModelConfig {
         enabled: true,

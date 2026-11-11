@@ -381,6 +381,34 @@ fn invalid(message: impl Into<String>) -> PluginError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_identity_is_opt_in_request_scoped_and_cannot_replace_credentials() {
+        let mut provider: ProviderSnapshot = serde_json::from_value(json!({
+            "provider_id":"claude-code", "channel":"oauth", "base_url":"https://example.test", "protocol":"anthropic-messages",
+            "options":{"client_version":"2.1.319"}, "client_headers":[
+                ["User-Agent","claude-cli/2.2.1 (external, cli)"],
+                ["x-stainless-runtime-version","v26.12.1"],
+                ["authorization","Bearer caller-secret"], ["cookie","caller-cookie"], ["session-id","caller-session"]
+            ]
+        })).unwrap();
+        assert_eq!(version(&provider, "2.0.0"), "2.1.319");
+        let mut headers = vec![("authorization".into(), "Bearer provider-secret".into())];
+        apply_claude(&provider, &mut headers, "2.0.0");
+        assert!(!headers.iter().any(|(_, value)| value.contains("2.2.1")));
+        provider
+            .options
+            .insert("identity_source".into(), json!("client"));
+        let options = provider.options.clone();
+        assert_eq!(version(&provider, "2.0.0"), "2.2.1");
+        apply_claude(&provider, &mut headers, "2.0.0");
+        let values: BTreeMap<_, _> = headers.into_iter().collect();
+        assert_eq!(values["user-agent"], "claude-cli/2.2.1 (external, cli)");
+        assert_eq!(values["authorization"], "Bearer provider-secret");
+        assert!(!values.contains_key("cookie"));
+        assert!(!values.contains_key("session-id"));
+        assert_eq!(provider.options, options);
+    }
     #[test]
     fn official_versions_exclude_prereleases_and_compare_numerically() {
         let values = json!([

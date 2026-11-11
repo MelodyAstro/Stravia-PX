@@ -117,4 +117,29 @@ mod tests {
             "unknown"
         );
     }
+
+    #[test]
+    fn outbound_shape_selection_is_explicit_and_distinguishes_http_and_wss() {
+        let settings = serde_json::from_value(
+            serde_json::json!({"tls_shape":"client","tls_ws_shape":"client"}),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::transport::shape_override(&settings, false, Some("codex_cli_rs/0.167.0"))
+                .unwrap()
+                .as_deref(),
+            Some("codex-http")
+        );
+        assert_eq!(
+            crate::transport::shape_override(&settings, true, Some("codex_cli_rs/0.167.0"))
+                .unwrap()
+                .as_deref(),
+            Some("codex-ws")
+        );
+        assert!(crate::transport::shape_override(&settings, false, Some("custom/1.0.0")).is_err());
+        assert_eq!(
+            crate::transport::shape_override(&Default::default(), false, None).unwrap(),
+            None
+        );
+    }
 }
