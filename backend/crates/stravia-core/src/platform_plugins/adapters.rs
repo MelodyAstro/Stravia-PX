@@ -555,6 +555,7 @@ mod tests {
             original: &snapshot,
             read_scope: ReadExposureScope::NONE,
             current: &request,
+            input_start: 0,
             context: &snapshot,
             route: Some(&route),
             round: 0,
@@ -630,7 +631,7 @@ mod tests {
             json!({"type":"reject","status":200,"code":"ok","message":"invalid"}),
         )
         .unwrap();
-        assert!(action.into_action().is_err());
+        assert!(action.into_actions(None).is_err());
         assert!(
             serde_json::from_value::<PluginActions>(
                 json!({"actions":[{"type":"execute_shell","value":"command"}]})
@@ -683,6 +684,7 @@ mod tests {
                 original: &snapshot,
                 read_scope: ReadExposureScope::NONE,
                 current: &request,
+            input_start: 0,
                 context: &snapshot,
                 route: Some(&route),
                 round: 0,
