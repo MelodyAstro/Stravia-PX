@@ -2598,8 +2598,6 @@ mod tests {
             BodyOperation::Image,
         ] {
             let session = NativeSession::new(&provider, operation);
-            let body = project(&session, json!({"model":"gpt-6-astra", "input":[]}));
-            let session = NativeSession::new(&provider, operation);
             let mut body = turn_body();
             session.project_body(&mut body).unwrap();
             let mut headers = provider.client_headers.clone();
