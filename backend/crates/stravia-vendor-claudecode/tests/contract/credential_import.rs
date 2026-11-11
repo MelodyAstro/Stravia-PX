@@ -90,15 +90,21 @@ async fn credential_import_refreshes_codex_and_google_and_preserves_client_metad
         assert_eq!(requests.len(), 2);
         for request in requests.iter() {
             assert_eq!(request.url, token_url);
-            let form: BTreeMap<_, _> = url::form_urlencoded::parse(&request.body)
-                .into_owned()
-                .collect();
-            assert_eq!(form["client_id"], client_id);
+            // Fixture client IDs contain only unreserved form characters.
+            let form = std::str::from_utf8(&request.body).unwrap();
+            assert_eq!(
+                form.split('&')
+                    .find_map(|field| field.strip_prefix("client_id=")),
+                Some(client_id)
+            );
         }
-        let second: BTreeMap<_, _> = url::form_urlencoded::parse(&requests[1].body)
-            .into_owned()
-            .collect();
-        assert_eq!(second["refresh_token"], "rotated-refresh");
+        let second = std::str::from_utf8(&requests[1].body).unwrap();
+        assert_eq!(
+            second
+                .split('&')
+                .find_map(|field| field.strip_prefix("refresh_token=")),
+            Some("rotated-refresh")
+        );
     }
 }
 
