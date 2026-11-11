@@ -8499,6 +8499,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "stravia-platform-plugin-example"
+version = "0.6.5"
+dependencies = [
+ "serde_json",
+ "stravia-platform-plugin-sdk",
+]
+
+[[package]]
+name = "stravia-platform-plugin-runtime"
+version = "0.6.5"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sha2 0.11.1",
+ "stravia-platform-plugin-sdk",
+ "tokio",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wat",
+]
+
+[[package]]
+name = "stravia-platform-plugin-sdk"
+version = "0.6.5"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
 name = "stravia-protocol-codec"
 version = "0.6.5"
 dependencies = [
@@ -9016,6 +9048,14 @@ dependencies = [
  "unicode-bidi",
  "unicode-normalization",
  "unicode-properties",
+]
+
+[[package]]
+name = "strinova-model-mapping"
+version = "0.6.5"
+dependencies = [
+ "serde_json",
+ "stravia-platform-plugin-sdk",
 ]
 
 [[package]]
@@ -12406,35 +12446,3 @@ dependencies = [
  "syn 3.0.6",
  "winnow 1.0.4",
 ]
-[[package]]
-name = "stravia-platform-plugin-example"
-version = "0.6.5"
-dependencies = [
- "serde_json",
- "stravia-platform-plugin-sdk",
-]
-
-[[package]]
-name = "stravia-platform-plugin-runtime"
-version = "0.6.5"
-dependencies = [
- "anyhow",
- "serde_json",
- "sha2 0.11.1",
- "stravia-platform-plugin-sdk",
- "tokio",
- "wasmtime",
- "wasmtime-wasi",
- "wat",
-]
-
-[[package]]
-name = "stravia-platform-plugin-sdk"
-version = "0.6.5"
-dependencies = [
- "semver",
- "serde",
- "serde_json",
- "wit-bindgen 0.63.0",
-]
-
