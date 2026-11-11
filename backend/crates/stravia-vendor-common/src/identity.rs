@@ -333,16 +333,18 @@ fn read_root(host: &GuestHost) -> Result<Map<String, Value>, PluginError> {
 
 fn fetch_version(host: &GuestHost, repo: &str, prefix: &str) -> Result<String, PluginError> {
     for suffix in ["releases/latest", "releases?per_page=30"] {
-        let response = host.http_start(stravia_vendor_sdk::HttpRequest {
-            method: "GET".into(),
-            url: format!("https://api.github.com/repos/{repo}/{suffix}"),
-            // No provider/client credentials ever reach the release service.
-            headers: vec![
-                ("accept".into(), "application/vnd.github+json".into()),
-                ("user-agent".into(), "Stravia-client-version-sync".into()),
-            ],
-            body: Vec::new(),
-        })?;
+        let mut headers = stravia_vendor_sdk::net::Fields::new();
+        // No provider/client credentials ever reach the release service.
+        headers.append("accept", b"application/vnd.github+json".to_vec());
+        headers.append("user-agent", b"Strinova-client-version-sync".to_vec());
+        let response = host.http_start(
+            stravia_vendor_sdk::net::Request::new(
+                "GET",
+                format!("https://api.github.com/repos/{repo}/{suffix}"),
+            )
+            .fields(headers),
+            &stravia_vendor_sdk::net::Options::new(),
+        )?;
         let status = response.status()?;
         if status == 404 {
             continue;
