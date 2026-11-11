@@ -350,11 +350,15 @@ fn create_router_inner(gateway: Gateway, auth: Option<AdminHttpState>) -> Router
         .route("/provider-allowances", get(list_provider_allowances))
         .route(
             "/provider-allowances/{provider_id}/budget",
-            get(get_account_budget).put(set_account_budget),
+            get(get_account_budget)
+                .put(set_account_budget)
+                .layer(middleware::from_fn(no_store)),
         )
         .route(
             "/provider-allowances/{provider_id}/reset",
-            get(provider_reset_state).post(redeem_provider_reset),
+            get(provider_reset_state)
+                .post(redeem_provider_reset)
+                .layer(middleware::from_fn(no_store)),
         )
         .route(
             "/provider-allowances/{provider_id}",
@@ -460,5 +464,16 @@ use web::*;
 
 #[cfg(test)]
 mod account_controls_tests;
+
+async fn no_store(
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
 #[cfg(test)]
 mod tests;

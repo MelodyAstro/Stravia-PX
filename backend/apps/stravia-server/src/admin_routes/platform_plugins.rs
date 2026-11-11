@@ -2,9 +2,9 @@ use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
-use axum::extract::{DefaultBodyLimit, Path, Request, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use axum::middleware::{self, Next};
+use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, put};
 use stravia_core::Gateway;
@@ -27,7 +27,7 @@ pub(super) fn routes() -> Router<Gateway> {
                 .post(replace)
                 .layer(DefaultBodyLimit::max(MAX_COMPONENT_BYTES)),
         )
-        .layer(middleware::from_fn(no_store))
+        .layer(middleware::from_fn(super::no_store))
 }
 
 async fn list(State(gateway): State<Gateway>) -> Response {
@@ -123,12 +123,4 @@ fn success<T: serde::Serialize>(data: T) -> Response {
 
 fn failure(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
-}
-
-async fn no_store(request: Request, next: Next) -> Response {
-    let mut response = next.run(request).await;
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
