@@ -478,6 +478,7 @@ fn allowance(
         .into_iter()
         .collect();
     Ok(AllowanceResponse {
+        action_result: None,
         allowances,
         models,
         plan_label: Some(format!("fixture-{}", Profile::current().version())),

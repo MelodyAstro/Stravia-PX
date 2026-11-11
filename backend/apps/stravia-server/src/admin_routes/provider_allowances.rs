@@ -137,3 +137,31 @@ fn internal_error(code: &'static str, message: &'static str) -> axum::response::
     )
         .into_response()
 }
+
+pub(super) async fn provider_reset_state(
+    State(gateway): State<Gateway>,
+    Path(provider_id): Path<String>,
+) -> impl IntoResponse {
+    match gateway.admin().provider_reset_state(&provider_id).await {
+        Ok(state) => Json(serde_json::json!({"data":state})).into_response(),
+        Err(_) => internal_error("ACCOUNT_RESET_STATE_FAILED", "Could not read reset state"),
+    }
+}
+
+pub(super) async fn redeem_provider_reset(
+    State(gateway): State<Gateway>,
+    Path(provider_id): Path<String>,
+    Json(input): Json<stravia_core::admin::provider_allowance::ManualResetInput>,
+) -> impl IntoResponse {
+    match gateway
+        .admin()
+        .redeem_provider_reset(&provider_id, input)
+        .await
+    {
+        Ok(result) => Json(serde_json::json!({"data":result})).into_response(),
+        Err(error) => {
+            tracing::warn!(provider_id, %error,"Account reset did not produce a confirmed result");
+            (StatusCode::CONFLICT,Json(serde_json::json!({"code":"ACCOUNT_RESET_UNCONFIRMED","error":"Reset could not be confirmed. Refresh its state and reuse the same request id."}))).into_response()
+        }
+    }
+}

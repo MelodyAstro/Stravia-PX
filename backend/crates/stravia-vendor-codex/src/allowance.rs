@@ -63,7 +63,7 @@ pub(super) fn connection_check(
     })
 }
 
-fn access_token(provider: &ProviderSnapshot) -> Result<&str, PluginError> {
+pub(super) fn access_token(provider: &ProviderSnapshot) -> Result<&str, PluginError> {
     ["access_token", "api_key", "apiKey", "token"]
         .into_iter()
         .find_map(|key| provider.credentials.get(key).and_then(non_empty))
@@ -77,7 +77,7 @@ fn access_token(provider: &ProviderSnapshot) -> Result<&str, PluginError> {
 /// Official 0.167.0 backend-client usage read. The TUI also sends
 /// `x-openai-codex-luna-reserve`, which backend-client reserves for clients
 /// that can switch to the Reserve model; a passive usage reader must not.
-fn usage_request(provider: &ProviderSnapshot, access_token: &str) -> Request {
+pub(super) fn usage_request(provider: &ProviderSnapshot, access_token: &str) -> Request {
     let mut headers = vec![
         ("user-agent".into(), crate::codex::user_agent()),
         ("authorization".into(), format!("Bearer {access_token}")),
@@ -233,6 +233,17 @@ fn parse(body: &[u8]) -> Option<AllowanceResponse> {
             allowances.push(allowance);
         }
     }
+    if let Some(count) = payload
+        .pointer("/rate_limit_reset_credits/available_count")
+        .and_then(Value::as_u64)
+        .filter(|n| *n <= 10000)
+    {
+        allowances.push(stravia_vendor_common::reset_inventory::item(
+            "reset_credits",
+            count,
+            None,
+        ));
+    }
     if allowances.is_empty() {
         return None;
     }
@@ -241,6 +252,7 @@ fn parse(body: &[u8]) -> Option<AllowanceResponse> {
     }
     let plan = plan_type(object);
     Some(AllowanceResponse {
+        action_result: None,
         allowances,
         models: Vec::new(),
         // live wham/usage 响应顶层带 `plan_type`（如 `pro`）；`plus`、`team` 等同为机器小写值。

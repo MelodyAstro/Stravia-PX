@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+mod actions;
+pub use actions::{ManualResetInput, ManualResetState};
 mod samples;
 mod service;
 mod suspension;

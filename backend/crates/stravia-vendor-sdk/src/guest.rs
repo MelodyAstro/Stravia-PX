@@ -677,6 +677,21 @@ pub struct CatalogSyncOutcome {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AllowanceRequest {
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<AllowanceAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AllowanceAction {
+    RedeemReset { request_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllowanceActionResult {
+    pub code: String,
+    pub request_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -713,6 +728,8 @@ pub struct ModelAllowance {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AllowanceResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_result: Option<AllowanceActionResult>,
     #[serde(default)]
     pub allowances: Vec<AllowanceItem>,
     #[serde(default)]

@@ -4,6 +4,7 @@
 //! 官方 2.1.319 的第一方交互流量为基准，并保留自定义工具的 `_` 名称隔离
 //! （见 [`request`]）；客户端仍使用原始工具名。
 
+mod account_control;
 mod allowance;
 mod auth;
 mod cache;
@@ -184,6 +185,7 @@ pub fn descriptor() -> VendorDescriptor {
         Capability::AuthOauth,
         Capability::ModelDiscovery,
         Capability::Allowance,
+        Capability::AllowanceControl,
         Capability::ConfigValidation,
     ]);
     VendorDescriptor {
@@ -356,10 +358,13 @@ pub fn execute(
         OperationInput::Discover { provider, request } => {
             discover(host, &provider, request).map(OperationOutput::Discover)
         }
-        OperationInput::Allowance {
-            provider,
-            request: _,
-        } => allowance::execute(host, &provider).map(OperationOutput::Allowance),
+        OperationInput::Allowance { provider, request } => {
+            if let Some(action) = request.action {
+                account_control::execute(host, &provider, action).map(OperationOutput::Allowance)
+            } else {
+                allowance::execute(host, &provider).map(OperationOutput::Allowance)
+            }
+        }
         OperationInput::ConfigValidation { request, .. } => Ok(OperationOutput::ConfigValidation(
             stravia_vendor_sdk::ConfigValidationResponse {
                 issues: identity::validation_issues(&request.options),

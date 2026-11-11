@@ -1,11 +1,13 @@
 //! Shared request, response, error, URL, and thinking utilities for Stravia vendor guests.
 
 pub mod account;
+pub mod account_action;
 pub mod common;
 pub mod connection_check;
 pub mod gemini;
 pub mod identity;
 pub mod plan;
+pub mod reset_inventory;
 pub mod thinking;
 
 pub use common::{

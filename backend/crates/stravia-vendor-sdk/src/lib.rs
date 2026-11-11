@@ -52,16 +52,16 @@ pub use envelope::{
     encode_request_payload,
 };
 pub use guest::{
-    AllowanceAmount, AllowanceBilling, AllowanceBillingKind, AllowanceBillingPeriod,
-    AllowanceBillingPrice, AllowanceItem, AllowanceRequest, AllowanceResponse, AuthRequest,
-    AuthResponse, AuthStep, CatalogSyncOutcome, CatalogSyncRequest, ConfigValidationRequest,
-    ConfigValidationResponse, ConnectionCheckRequest, ConnectionCheckResponse,
-    ConnectionCheckVerification, DiscoverRequest, DiscoverResponse, DiscoveredModel, ErrorKind,
-    MediaArtifact, MediaImageAspectRatio, MediaImageRequest, MediaImageResolution,
-    MediaImageResponse, MediaReference, ModelAllowance, ModelErrorKind, ModelMetadata, Operation,
-    OperationInput, OperationOutput, PluginError, ProviderSnapshot, SearchRequest, SearchResponse,
-    SearchSource, TRANSPORT_PREFERENCE_METADATA_KEY, TransportFailure, TransportPreference,
-    UpstreamFailure, ValidationIssue, VendorGuest,
+    AllowanceAction, AllowanceActionResult, AllowanceAmount, AllowanceBilling,
+    AllowanceBillingKind, AllowanceBillingPeriod, AllowanceBillingPrice, AllowanceItem,
+    AllowanceRequest, AllowanceResponse, AuthRequest, AuthResponse, AuthStep, CatalogSyncOutcome,
+    CatalogSyncRequest, ConfigValidationRequest, ConfigValidationResponse, ConnectionCheckRequest,
+    ConnectionCheckResponse, ConnectionCheckVerification, DiscoverRequest, DiscoverResponse,
+    DiscoveredModel, ErrorKind, MediaArtifact, MediaImageAspectRatio, MediaImageRequest,
+    MediaImageResolution, MediaImageResponse, MediaReference, ModelAllowance, ModelErrorKind,
+    ModelMetadata, Operation, OperationInput, OperationOutput, PluginError, ProviderSnapshot,
+    SearchRequest, SearchResponse, SearchSource, TRANSPORT_PREFERENCE_METADATA_KEY,
+    TransportFailure, TransportPreference, UpstreamFailure, ValidationIssue, VendorGuest,
 };
 pub use host_api::{GuestHost, read_http_body};
 pub use net::{

@@ -34,7 +34,10 @@ pub(crate) fn execute(
     provider: &ProviderSnapshot,
 ) -> Result<AllowanceResponse, PluginError> {
     let access_token = access_token(provider)?;
-    let response = host.http_start(usage_request(provider, access_token), &crate::net_options())?;
+    let response = host.http_start(
+        usage_request(provider, access_token, true),
+        &crate::net_options(),
+    )?;
     let status = response.status()?;
     let headers = response.headers()?;
     let body = read_http_body(&response, MAX_USAGE_BODY)?;
@@ -65,7 +68,7 @@ pub(crate) fn connection_check(
     provider: &ProviderSnapshot,
 ) -> Result<ConnectionCheckResponse, PluginError> {
     let response = host.http_start(
-        usage_request(provider, access_token(provider)?),
+        usage_request(provider, access_token(provider)?, false),
         &crate::net_options(),
     )?;
     let value = connection_check::read_json(&response)?;
@@ -75,7 +78,11 @@ pub(crate) fn connection_check(
     })
 }
 
-fn usage_request(provider: &ProviderSnapshot, access_token: &str) -> Request {
+pub(super) fn usage_request(
+    provider: &ProviderSnapshot,
+    access_token: &str,
+    inventory: bool,
+) -> Request {
     let mut headers = vec![
         ("accept".into(), "application/json, text/plain, */*".into()),
         ("anthropic-beta".into(), USAGE_BETAS.into()),
@@ -84,7 +91,16 @@ fn usage_request(provider: &ProviderSnapshot, access_token: &str) -> Request {
         ("authorization".into(), format!("Bearer {access_token}")),
     ];
     stravia_vendor_common::identity::apply_claude(provider, &mut headers, DEFAULT_CLIENT_VERSION);
-    crate::net_request("GET", USAGE_URL, headers, Vec::new())
+    crate::net_request(
+        "GET",
+        if inventory {
+            "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
+        } else {
+            USAGE_URL
+        },
+        headers,
+        Vec::new(),
+    )
 }
 
 /// 接受 `limits` 的空列表和缺省窗口；只要出现的已知字段类型正确即可通过，
@@ -326,10 +342,17 @@ fn parse(payload: &Value) -> Option<AllowanceResponse> {
     {
         allowances.push(extra_usage(spend));
     }
+    if let Some(inventory) = stravia_vendor_common::reset_inventory::claude(
+        payload,
+        chrono::Utc::now().timestamp_millis(),
+    ) {
+        allowances.push(inventory);
+    }
     if allowances.is_empty() && models.is_empty() {
         return None;
     }
     Some(AllowanceResponse {
+        action_result: None,
         allowances,
         models: models
             .into_iter()

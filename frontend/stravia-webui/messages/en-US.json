@@ -1,4 +1,11 @@
 {
+  "account_reset_use": "Use one reset",
+  "account_reset_confirm": "Consume one available reset?",
+  "account_reset_warning": "This action cannot be undone. It does not purchase credits or change your credit balance.",
+  "account_reset_unknown": "Reset inventory is unavailable. Refresh usage before redeeming.",
+  "account_reset_pending": "A previous reset is unconfirmed. Retrying reuses the same request identifier.",
+  "account_reset_done": "Reset result: {result}",
+  "account_reset_cancel": "Cancel",
   "platform_plugins_title": "Platform plugins",
   "platform_plugins_install": "Install plugin",
   "platform_plugins_refresh": "Refresh",

@@ -918,7 +918,10 @@ async fn oauth_and_inference_enforce_native_wire_at_real_http_boundary() {
         &services,
         OperationInput::Allowance {
             provider: provider.clone(),
-            request: AllowanceRequest { model: None },
+            request: AllowanceRequest {
+                model: None,
+                ..Default::default()
+            },
         },
     )
     .await

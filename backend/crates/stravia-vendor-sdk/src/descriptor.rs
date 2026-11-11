@@ -103,6 +103,8 @@ pub enum Capability {
     ModelDiscovery,
     /// Upstream allowance / quota read.
     Allowance,
+    /// Explicit administrator account mutations through AllowanceRequest actions.
+    AllowanceControl,
     /// Plugin-side validation of proposed config values.
     ConfigValidation,
 }
@@ -118,6 +120,7 @@ impl Capability {
             Self::AuthOauth => "auth_oauth",
             Self::ModelDiscovery => "model_discovery",
             Self::Allowance => "allowance",
+            Self::AllowanceControl => "allowance_control",
             Self::ConfigValidation => "config_validation",
         }
     }
@@ -132,6 +135,7 @@ impl Capability {
             "auth_oauth" => Self::AuthOauth,
             "model_discovery" => Self::ModelDiscovery,
             "allowance" => Self::Allowance,
+            "allowance_control" => Self::AllowanceControl,
             "config_validation" => Self::ConfigValidation,
             _ => return None,
         })

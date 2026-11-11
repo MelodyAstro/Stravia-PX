@@ -56,6 +56,7 @@ import { Switch } from '#lib/components/ui/switch/index.js'
 import * as Table from '#lib/components/ui/table/index.js'
 import * as Tabs from '#lib/components/ui/tabs/index.js'
 import * as Tooltip from '#lib/components/ui/tooltip/index.js'
+import AccountResetControl from '#lib/components/account-reset-control.svelte'
 import AllowanceSuspension from '#lib/components/allowance-suspension.svelte'
 import { cn } from '#lib/utils.js'
 
@@ -757,6 +758,9 @@ function allowanceErrorMessage(category: ProviderAllowanceErrorCategory): string
                   >{m.allowances_plan({ plan: snapshot.plan_label })}</span>
               {/if}
             </div>
+          {/if}
+          {#if snapshot && ["openai-codex", "claude-code"].includes(snapshot.catalog_provider_id)}
+            <AccountResetControl {providerId} available={provider.allowances.find((item) => item.key === "reset_credits")?.remaining?.value ?? null} onrefresh={() => void reading.refreshProvider(providerId)} />
           {/if}
           {#if provider.allowances.length > 0}
             {@render allowanceDetailTable(provider)}

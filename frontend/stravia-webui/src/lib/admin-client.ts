@@ -468,6 +468,8 @@ export const admin = {
     apiKeys: (window?: StatsWindow) => request<ApiKeyStats[]>('GET', statsPath('/stats/api-keys', window)),
   },
   allowances: {
+    resetState: (providerId: string) => request<{request_id: string | null; result: string | null; pending: boolean}>("GET", `/provider-allowances/${encodeURIComponent(providerId)}/reset`),
+    redeemReset: (providerId: string, requestId: string) => request<{request_id:string;code:string}>("POST", `/provider-allowances/${encodeURIComponent(providerId)}/reset`, {request_id:requestId,confirmed:true}),
     list: () => request<ProviderAllowanceTarget[]>('GET', '/provider-allowances'),
     get: (providerId: string) =>
       request<ProviderAllowanceSnapshot>('GET', `/provider-allowances/${encodeURIComponent(providerId)}`),

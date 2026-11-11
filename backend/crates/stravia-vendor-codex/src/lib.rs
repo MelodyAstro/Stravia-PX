@@ -1,3 +1,4 @@
+mod account_control;
 mod allowance;
 mod auth;
 mod codex;
@@ -45,6 +46,7 @@ pub fn descriptor() -> VendorDescriptor {
         Capability::AuthOauth,
         Capability::ModelDiscovery,
         Capability::Allowance,
+        Capability::AllowanceControl,
         Capability::ConfigValidation,
     ]);
     VendorDescriptor {
@@ -242,10 +244,13 @@ pub fn execute(
             auth::execute(host, &provider, request).map(OperationOutput::Auth)
         }
         OperationInput::Discover { provider, request } => discover(host, provider, request),
-        OperationInput::Allowance {
-            provider,
-            request: _,
-        } => allowance::execute(host, &provider).map(OperationOutput::Allowance),
+        OperationInput::Allowance { provider, request } => {
+            if let Some(action) = request.action {
+                account_control::execute(host, &provider, action).map(OperationOutput::Allowance)
+            } else {
+                allowance::execute(host, &provider).map(OperationOutput::Allowance)
+            }
+        }
         OperationInput::ConfigValidation {
             provider: _,
             request,

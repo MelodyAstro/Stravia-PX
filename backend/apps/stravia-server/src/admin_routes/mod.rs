@@ -35,8 +35,8 @@ mod platform_plugins_tests;
 mod provider_allowances;
 use connect_clients::preview_connect_client_handler;
 use provider_allowances::{
-    get_provider_allowance, list_provider_allowances, refresh_provider_allowance,
-    replace_provider_allowance_guards,
+    get_provider_allowance, list_provider_allowances, provider_reset_state, redeem_provider_reset,
+    refresh_provider_allowance, replace_provider_allowance_guards,
 };
 
 #[cfg(test)]
@@ -347,6 +347,10 @@ fn create_router_inner(gateway: Gateway, auth: Option<AdminHttpState>) -> Router
         .route("/performance/timeline", get(performance::timeline))
         .route("/performance/export", get(performance::export))
         .route("/provider-allowances", get(list_provider_allowances))
+        .route(
+            "/provider-allowances/{provider_id}/reset",
+            get(provider_reset_state).post(redeem_provider_reset),
+        )
         .route(
             "/provider-allowances/{provider_id}",
             get(get_provider_allowance),

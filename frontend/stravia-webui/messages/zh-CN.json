@@ -1,4 +1,11 @@
 {
+  "account_reset_use": "使用一次重置",
+  "account_reset_confirm": "消耗一次可用重置？",
+  "account_reset_warning": "此操作不可撤销，不会购买 credits 或改变 credits 余额。",
+  "account_reset_unknown": "暂未取得重置卡库存，请先刷新额度。",
+  "account_reset_pending": "上次重置尚未确认，重试将沿用同一个请求编号。",
+  "account_reset_done": "重置结果：{result}",
+  "account_reset_cancel": "取消",
   "platform_plugins_title": "平台插件",
   "platform_plugins_install": "安装插件",
   "platform_plugins_refresh": "刷新",

@@ -243,6 +243,7 @@ fn parse_xai(body: &[u8], now: i64) -> Result<AllowanceResponse, ()> {
         Some("normal".into())
     };
     Ok(AllowanceResponse {
+        action_result: None,
         allowances: vec![allowance],
         models: Vec::new(),
         plan_label: None,
