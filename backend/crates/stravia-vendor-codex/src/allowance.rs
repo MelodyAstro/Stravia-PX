@@ -248,7 +248,9 @@ fn parse(body: &[u8]) -> Option<AllowanceResponse> {
         return None;
     }
     for allowance in &mut allowances {
-        allowance.condition = condition(allowance);
+        if allowance.key != "reset_credits" {
+            allowance.condition = condition(allowance);
+        }
     }
     let plan = plan_type(object);
     Some(AllowanceResponse {
@@ -452,6 +454,16 @@ mod tests {
     use base64::Engine;
     use serde_json::{Value, json};
     use stravia_vendor_sdk::{AllowanceAmount, AllowanceBillingKind, AllowanceBillingPeriod};
+
+    #[test]
+    fn zero_reset_cards_are_inventory_and_never_an_exhausted_model_quota() {
+        let response = parse(br#"{"rate_limit_reset_credits":{"available_count":0}}"#).unwrap();
+        let inventory = &response.allowances[0];
+        assert_eq!(inventory.remaining.as_ref().unwrap().value, "0");
+        assert_eq!(inventory.condition.as_deref(), Some("unknown"));
+        assert!(parse(br#"{"rate_limit_reset_credits":{"available_count":-1}}"#).is_none());
+        assert!(parse(br#"{"rate_limit_reset_credits":{"available_count":null}}"#).is_none());
+    }
 
     use super::{account_label, billing_for_plan, parse, validate_usage};
 
