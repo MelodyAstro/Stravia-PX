@@ -119,6 +119,15 @@ jobs:
           path: ~/.cargo/bin/cargo-patch-crate
           key: patch-crate-0.1.13-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1
 
+      - name: Restore evolving compiled workspace
+        id: evolving-workspace
+        uses: actions/cache/restore@v5
+        with:
+          key: strinova-compiled-v065-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ github.sha }}
+          restore-keys: |
+            strinova-compiled-v065-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-
+          path: target
+
       - name: Set up pinned Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -245,3 +254,10 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+      - name: Save compiled workspace after checks or failure
+        if: always() && steps.evolving-workspace.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          key: strinova-compiled-v065-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_VERSION }}-${{ github.sha }}
+          path: target
