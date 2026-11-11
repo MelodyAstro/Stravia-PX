@@ -56,3 +56,57 @@ async fn account_controls_require_admin_and_mutations_require_explicit_confirmat
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn account_controls_credential_import_is_admin_only_and_preview_never_echoes_tokens()
+-> anyhow::Result<()> {
+    use axum::body::to_bytes;
+    let directory = tempfile::tempdir()?;
+    let (gateway, app, token) = contents_fixture(directory.path()).await?;
+    let document = serde_json::json!({"type":"codex", "refresh_token":"sensitive-import-fixture", "email":"fixture@example.invalid", "proxy":"https://ignored.invalid"}).to_string();
+    let payload = serde_json::json!({"kind":"codex", "json":document}).to_string();
+    for path in [
+        "/api/v1/providers/credential-import/preview",
+        "/api/v1/providers/credential-import",
+        "/api/v1/providers/example/rt-backup",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.clone()))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/providers/credential-import/preview")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(payload.clone()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let bytes = to_bytes(response.into_body(), 4096).await?;
+    let body: serde_json::Value = serde_json::from_slice(&bytes)?;
+    assert_eq!(body["data"]["rows"][0]["code"], "IMPORT_READY");
+    assert!(!String::from_utf8_lossy(&bytes).contains("sensitive-import-fixture"));
+    assert!(!String::from_utf8_lossy(&bytes).contains("ignored.invalid"));
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/api/v1/providers/credential-import")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(payload))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert!(gateway.admin().list_providers().await?.is_empty());
+    Ok(())
+}

@@ -11,6 +11,8 @@ Claude、Codex 和 GA 的服务端身份、自定义 UA 与 TLS，以及官方�
 [v0.6.5 上游请求身份配置](OUTBOUND-IDENTITY-v0.6.5.md)。
 账号重置次数、手动 reset 和本站累计消费上限见 [账号额度控制](ACCOUNT-CONTROLS.md)。
 消费上限默认关闭，缺少逐次扣费明细时按官方费率保守估算，并与官方余额分开显示。
+Codex 多格式凭据导入、Antigravity/Google RT JSON 备份和 CI 保留策略见
+[凭据迁移说明](CREDENTIAL-IMPORT.md)。
 
 ## 当前补丁
 

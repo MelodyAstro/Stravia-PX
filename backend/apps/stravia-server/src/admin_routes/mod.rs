@@ -27,6 +27,7 @@ use crate::oauth_callback::OAuthCallbackManager;
 use stravia_core::db::models::*;
 
 mod connect_clients;
+mod credential_import;
 mod money;
 mod performance;
 mod platform_plugins;
@@ -69,6 +70,7 @@ fn create_router_inner(gateway: Gateway, auth: Option<AdminHttpState>) -> Router
         .route("/system/extensions", get(list_loaded_extensions))
         .merge(vendor_plugins::routes())
         .merge(platform_plugins::routes())
+        .merge(credential_import::routes())
         .route(
             "/connect-clients/preview",
             post(preview_connect_client_handler),

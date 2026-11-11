@@ -49,9 +49,7 @@ pub(super) fn execute(
             state,
         } => start(host, redirect_uri, state),
         AuthStep::Exchange { callback_url } => exchange(host, callback_url),
-        AuthStep::ManualInput { .. } => {
-            Err(unsupported("OpenAI Codex OAuth requires a callback URL"))
-        }
+        AuthStep::ManualInput { value } => import_credentials(host, provider, &value),
         AuthStep::Refresh => refresh(host, provider),
         AuthStep::Poll => Err(unsupported("OpenAI Codex OAuth is not a device-code flow")),
         AuthStep::Revoke => Err(unsupported(
@@ -151,17 +149,104 @@ fn refresh(host: &GuestHost, provider: &ProviderSnapshot) -> Result<AuthResponse
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| auth_error("OpenAI OAuth refresh token is missing"))?;
+    let client_id = provider
+        .credentials
+        .get("client_id")
+        .and_then(Value::as_str)
+        .unwrap_or(CLIENT_ID);
+    if !client_id.starts_with("app_")
+        || client_id.len() > 256
+        || client_id
+            .bytes()
+            .any(|c| !c.is_ascii_alphanumeric() && c != b'_')
+    {
+        return Err(invalid("OAuth client ID is malformed"));
+    }
     let form = encode_form(&[
         ("grant_type", "refresh_token"),
-        ("client_id", CLIENT_ID),
+        ("client_id", client_id),
         ("refresh_token", refresh_token),
         ("scope", SCOPE),
     ]);
     let mut response = credentials_response(token_request(host, form)?, Some(refresh_token))?;
     if let AuthResponse::Credentials { values, .. } = &mut response {
         inherit_id_token(values, &provider.credentials);
+        for key in ["account_id", "email", "client_id"] {
+            if let Some(value) = provider.credentials.get(key) {
+                values.insert(key.into(), value.clone());
+            }
+        }
     }
     Ok(response)
+}
+
+fn import_credentials(
+    host: &GuestHost,
+    provider: &ProviderSnapshot,
+    input: &str,
+) -> Result<AuthResponse, PluginError> {
+    let imported: BTreeMap<String, Value> = serde_json::from_str(input)
+        .map_err(|_| invalid("Credential import requires OAuth JSON"))?;
+    if input.len() > 256 * 1024
+        || imported.iter().any(|(key, value)| {
+            !matches!(
+                key.as_str(),
+                "access_token"
+                    | "refresh_token"
+                    | "id_token"
+                    | "account_id"
+                    | "email"
+                    | "client_id"
+            ) || value
+                .as_str()
+                .is_none_or(|text| text.len() > 32768 || text.chars().any(char::is_control))
+        })
+    {
+        return Err(invalid("Credential import contains invalid fields"));
+    }
+    let mut account = provider.clone();
+    account.credentials = imported;
+    if account
+        .credentials
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .is_some_and(|v| !v.is_empty())
+    {
+        return refresh(host, &account);
+    }
+    let token: TokenResponse = serde_json::from_value(
+        serde_json::to_value(&account.credentials).map_err(|_| invalid("Invalid credentials"))?,
+    )
+    .map_err(|_| invalid("Invalid credentials"))?;
+    let mut response = credentials_response(token, None)?;
+    if let AuthResponse::Credentials {
+        values,
+        expires_at_unix_ms,
+    } = &mut response
+    {
+        for key in ["account_id", "email", "client_id"] {
+            if let Some(value) = account.credentials.get(key) {
+                values.insert(key.into(), value.clone());
+            }
+        }
+        account.credentials = values.clone();
+        // Access-only exports cannot be refreshed; verify them without inference.
+        crate::allowance::connection_check(host, &account)?;
+        *expires_at_unix_ms = account
+            .credentials
+            .get("access_token")
+            .and_then(Value::as_str)
+            .and_then(jwt_expiry);
+    }
+    Ok(response)
+}
+
+fn jwt_expiry(token: &str) -> Option<i64> {
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(token.split('.').nth(1)?)
+        .ok()?;
+    let value: Value = serde_json::from_slice(&payload).ok()?;
+    value.get("exp")?.as_i64()?.checked_mul(1000)
 }
 
 /// 刷新结果会整体替换已保存凭据，而刷新响应不保证重发 `id_token`；
@@ -177,6 +262,7 @@ fn inherit_id_token(values: &mut BTreeMap<String, Value>, previous: &BTreeMap<St
     if let Some(token) = previous
         .get("raw")
         .and_then(|raw| raw.get("id_token"))
+        .or_else(|| previous.get("id_token"))
         .filter(readable)
     {
         raw.insert("id_token".into(), token.clone());
@@ -237,7 +323,11 @@ fn credentials_response(
             )
         })?;
     let mut values = BTreeMap::new();
-    if let Some(account_id) = account_id_from_jwt(&access_token) {
+    if let Some(account_id) = account_id_from_jwt(&access_token).or_else(|| {
+        raw.get("id_token")
+            .and_then(Value::as_str)
+            .and_then(account_id_from_jwt)
+    }) {
         values.insert("account_id".into(), Value::String(account_id));
     }
     values.insert("access_token".into(), Value::String(access_token));

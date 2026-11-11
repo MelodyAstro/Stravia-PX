@@ -25,6 +25,7 @@ mod media_generation;
 mod model_data;
 mod money;
 mod oauth;
+pub use oauth::{CredentialImportInput, CredentialImportPreview, CredentialImportRowView};
 mod request_models;
 pub(crate) use oauth::runtime::{OAuthRefreshRuntime, provider_oauth_needs_refresh};
 mod observability;

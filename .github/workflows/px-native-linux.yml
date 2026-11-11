@@ -230,7 +230,8 @@ jobs:
           cargo test --locked --release -p stravia-vendor-sdk --lib
           cargo test --locked --release -p stravia-vendor-common --lib identity::tests
           cargo test --locked --release -p stravia-vendor-common --lib reset_inventory::tests
-          cargo test --locked --release -p stravia-vendor-codex -p stravia-vendor-claudecode --lib
+          cargo test --locked --release -p stravia-vendor-codex -p stravia-vendor-claudecode -p stravia-vendor-antigravity --lib
+          STRAVIA_CODEX_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_codex.wasm" STRAVIA_ANTIGRAVITY_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm" cargo test --locked --release -p stravia-vendor-claudecode --test contract credential_import -- --ignored
           STRAVIA_CLAUDECODE_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm" cargo test --locked --release -p stravia-vendor-claudecode --test contract official_identity_sync -- --ignored
           STRAVIA_CLAUDECODE_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm" STRAVIA_CODEX_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_codex.wasm" cargo test --locked --release -p stravia-vendor-claudecode --test contract account_reset -- --ignored
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib plugin::network::shape -- --test-threads=1
@@ -246,6 +247,7 @@ jobs:
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib account_usage -- --test-threads=1
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib account_usage_postgres -- --ignored --test-threads=1
           cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib account_spend_limit -- --test-threads=1
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib credential_import -- --test-threads=1
 
       - name: Verify authenticated platform plugin management
         if: inputs.tools_only != true

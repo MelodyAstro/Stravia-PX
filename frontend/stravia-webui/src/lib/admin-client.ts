@@ -12,6 +12,12 @@ export interface AccountBudgetView {
   estimated: boolean
   rate_date: string
 }
+export interface CredentialImportRow {
+  index: number
+  label: string
+  code: string
+  has_refresh_token: boolean
+}
 import type { RequestModelConfig, RequestModelsView } from '#lib/types/api-key.js'
 import { apiBase, authenticatedFetch, decodeAdmin, isTauri } from '#lib/auth.js'
 import type { ConnectClientApplyPlan } from '#lib/connect-client-apply.js'
@@ -250,6 +256,19 @@ export const admin = {
     get: (id: string) => request<ModelChangeRecord>('GET', `/model-changes/${encodeURIComponent(id)}`),
   },
   providers: {
+    previewImport: (kind: string, json: string) =>
+      request<{ rows: CredentialImportRow[] }>('POST', '/providers/credential-import/preview', { kind, json }),
+    importCredential: (kind: string, json: string, index: number, name: string, useProxy: boolean) =>
+      request<Provider>('POST', '/providers/credential-import', {
+        kind,
+        json,
+        index,
+        name,
+        use_proxy: useProxy,
+        confirmed: true,
+      }),
+    backupRt: (id: string) =>
+      request<Record<string, string>>('POST', `/providers/${encodeURIComponent(id)}/rt-backup`, { confirmed: true }),
     descriptors: () => request<ProviderMetadata[]>('GET', '/vendors'),
     choices: () => request<ProviderMetadata[]>('GET', '/vendors?selectable=true'),
     list: () => request<Provider[]>('GET', '/providers'),

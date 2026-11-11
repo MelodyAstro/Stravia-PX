@@ -45,6 +45,7 @@ impl AdminService {
                  — ensure the callback reaches this replica (session affinity required)"
             );
         }
+        let mut ready_bundle = None;
         let (auth_url, user_code, verification_uri, interval_seconds, vendor_state) = match response
         {
             Some(stravia_vendor_sdk::AuthResponse::Authorization {
@@ -61,6 +62,10 @@ impl AdminService {
                 state,
             ),
             None if auth_descriptor.flow == stravia_vendor_sdk::AuthFlow::Manual => {
+                (None, None, None, None, None)
+            }
+            Some(response @ stravia_vendor_sdk::AuthResponse::Credentials { .. }) => {
+                ready_bundle = Some(credential_bundle_from_response(response)?);
                 (None, None, None, None, None)
             }
             _ => anyhow::bail!("vendor auth start did not return an authorization response"),
@@ -105,14 +110,23 @@ impl AdminService {
             channel: candidate.channel,
             auth_descriptor,
             scheme: scheme.as_str().to_string(),
-            status: AuthSessionStatus::Pending.as_str().to_string(),
+            status: if ready_bundle.is_some() {
+                AuthSessionStatus::Ready
+            } else {
+                AuthSessionStatus::Pending
+            }
+            .as_str()
+            .to_string(),
             use_proxy: candidate.use_proxy,
             user_code,
             verification_uri,
             verification_uri_complete: auth_url,
             state_json: Some(serde_json::json!({ "state": state }).to_string()),
             context_json: None,
-            result_json: None,
+            result_json: ready_bundle
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?,
             expires_at: Some((now + chrono::Duration::minutes(10)).to_rfc3339()),
             poll_interval_seconds: interval_seconds
                 .map(|seconds| i32::try_from(seconds).unwrap_or(i32::MAX)),

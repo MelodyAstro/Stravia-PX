@@ -1,6 +1,6 @@
 # Changelog
 
-## Strinova — upstream 0.6.5 integration
+## Strinova 0.6.5-patch — upstream 0.6.5 integration
 
 - Renamed the product and repository to Strinova, with explicit upstream attribution.
 - Preserved Claude/Codex compatibility components, per-key model mappings, request recognition, and platform plugins.
@@ -9,6 +9,8 @@
 - Framed the API key model selector with a complete rounded border.
 - Added explicit, idempotent account-reset controls and bounded reset inventory to the Codex and Claude Code components.
 - Added opt-in, account-scoped lifetime site spend estimates, with durable concurrent reservations, uncertain-use accounting and visible credit/USD units.
+- Added previewed Codex OAuth imports for sub2api, Cockpit Tools, CLIProxyAPI and official auth.json, plus Antigravity/Google RT JSON imports and confirmed backups.
+- Limited CI history to the newest 25 runs while retaining published release assets and compiled-tool caches.
 - Kept native deployment, stable data paths and CI compilation/tool caches.
 
 

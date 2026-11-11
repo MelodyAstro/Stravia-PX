@@ -33,6 +33,8 @@ const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-0000000000aa";
 
 #[path = "contract/account_controls.rs"]
 mod account_controls;
+#[path = "contract/credential_import.rs"]
+mod credential_import;
 
 fn artifact() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("STRAVIA_CLAUDECODE_WASM") {

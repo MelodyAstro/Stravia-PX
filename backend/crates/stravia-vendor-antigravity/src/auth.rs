@@ -56,6 +56,9 @@ pub(crate) fn execute(
             exchange(host, provider, session, code)
         }
         AuthStep::ManualInput { value } => {
+            if value.trim_start().starts_with('{') {
+                return import_credentials(host, provider, &value);
+            }
             let session = load(host, provider)?;
             exchange(host, provider, session, value.trim())
         }
@@ -170,16 +173,28 @@ fn refresh(host: &GuestHost, provider: &ProviderSnapshot) -> Result<AuthResponse
             }
         }
     }
+    let client_id = client::credential(provider, "client_id").unwrap_or(CLIENT_ID);
+    if client_id.len() > 256
+        || !client_id.ends_with(".apps.googleusercontent.com")
+        || client_id.chars().any(char::is_whitespace)
+    {
+        return Err(invalid("Google OAuth client ID is malformed"));
+    }
+    let client_secret = client::credential(provider, "client_secret")
+        .or_else(|| (client_id == CLIENT_ID).then_some(CLIENT_SECRET))
+        .ok_or_else(|| invalid("Imported Google OAuth client requires its client secret"))?;
     let token = token_request(
         host,
         &[
             ("grant_type", "refresh_token"),
-            ("client_id", CLIENT_ID),
-            ("client_secret", CLIENT_SECRET),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
             ("refresh_token", refresh),
         ],
     )?;
-    let (values, expires_at_unix_ms) = token_values(&token, previous, false)?;
+    let (mut values, expires_at_unix_ms) = token_values(&token, previous, false)?;
+    values.insert("client_id".into(), json!(client_id));
+    values.insert("client_secret".into(), json!(client_secret));
     if let Some(session) = &mut binding {
         session.values = values.clone();
         session.expires_at_unix_ms = expires_at_unix_ms;
@@ -189,6 +204,38 @@ fn refresh(host: &GuestHost, provider: &ProviderSnapshot) -> Result<AuthResponse
         values,
         expires_at_unix_ms,
     })
+}
+
+fn import_credentials(
+    host: &GuestHost,
+    provider: &ProviderSnapshot,
+    input: &str,
+) -> Result<AuthResponse, PluginError> {
+    let values: BTreeMap<String, Value> =
+        serde_json::from_str(input).map_err(|_| invalid("RT import requires JSON"))?;
+    if input.len() > 256 * 1024
+        || values.iter().any(|(key, value)| {
+            !matches!(
+                key.as_str(),
+                "access_token"
+                    | "refresh_token"
+                    | "project_id"
+                    | "account_id"
+                    | "email"
+                    | "client_id"
+                    | "client_secret"
+            ) || value
+                .as_str()
+                .is_none_or(|text| text.len() > 32768 || text.chars().any(char::is_control))
+        })
+    {
+        return Err(invalid("RT import contains invalid fields"));
+    }
+    let mut account = provider.clone();
+    account.credentials = values;
+    // Imported Google tokens are exchanged only at Google's fixed OAuth endpoint.
+    // Project discovery/onboarding follows the normal model-discovery path.
+    refresh(host, &account)
 }
 
 fn token_request(host: &GuestHost, params: &[(&str, &str)]) -> Result<Value, PluginError> {

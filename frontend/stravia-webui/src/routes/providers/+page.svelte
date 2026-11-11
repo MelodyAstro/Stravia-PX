@@ -41,6 +41,7 @@ import type {
 } from '#lib/types.js'
 import PageHeader from '#lib/components/page-header.svelte'
 import ProviderEditor from '#lib/components/provider-editor.svelte'
+import CredentialImport from '#lib/components/credential-import.svelte'
 import ProviderOAuthAuthorization from '#lib/components/provider-oauth-authorization.svelte'
 import ProviderMark from '#lib/components/provider-mark.svelte'
 import StatusIndicator from '#lib/components/status-indicator.svelte'
@@ -86,6 +87,32 @@ const capabilityDriftsQuery = createQuery(() => ({
 }))
 
 let editorOpen = $state(false)
+let importOpen = $state(false)
+let rtBackupTarget = $state<Provider>()
+let rtBackupOpen = $state(false)
+let rtBackupBusy = $state(false)
+
+async function backupRt(): Promise<void> {
+  if (!rtBackupTarget || rtBackupBusy) return
+  rtBackupBusy = true
+  try {
+    const data = await admin.providers.backupRt(rtBackupTarget.id)
+    const href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+    try {
+      const anchor = document.createElement('a')
+      anchor.href = href
+      anchor.download = 'antigravity-rt.json'
+      anchor.click()
+    } finally {
+      URL.revokeObjectURL(href)
+    }
+    rtBackupOpen = false
+  } catch {
+    toast.error(m.credential_import_failed())
+  } finally {
+    rtBackupBusy = false
+  }
+}
 // 桌面表格与窄屏列表共用同一搜索状态。
 let query = $state('')
 const changesSheet = getModelChanges()
@@ -386,6 +413,7 @@ async function copyProvider(): Promise<void> {
 <svelte:head><title>{m.common_model_services()} · Strinova</title></svelte:head>
 
 {#snippet providerPageActions()}
+  <Button variant="outline" onclick={() => (importOpen = true)}>{m.credential_import_title()}</Button>
   <Button onclick={openCreate}><PlusIcon data-icon="inline-start" />{m.providers_add()}</Button>
 {/snippet}
 
@@ -405,6 +433,13 @@ async function copyProvider(): Promise<void> {
     </DropdownMenu.Trigger>
     <DropdownMenu.Content class="w-52" align="end">
       <DropdownMenu.Group>
+        {#if provider.vendor === 'antigravity'}
+          <DropdownMenu.Item
+            onSelect={() => {
+              rtBackupTarget = provider
+              rtBackupOpen = true
+            }}>{m.credential_rt_backup()}</DropdownMenu.Item>
+        {/if}
         {#if channel?.auth}
           <DropdownMenu.Item
             onSelect={() => void reauthorizeProvider(provider)}
@@ -589,7 +624,7 @@ async function copyProvider(): Promise<void> {
 {/snippet}
 
 <div class={['route-page', providersEmpty ? 'route-page-empty' : 'providers-page']}>
-  <PageHeader title={m.common_model_services()} actions={providers.length > 0 ? providerPageActions : undefined} />
+  <PageHeader title={m.common_model_services()} actions={providerPageActions} />
 
   <section class={['route-section', !providersEmpty && 'providers-workspace']} aria-labelledby="provider-table-title">
     <h2 id="provider-table-title" class="sr-only">{m.providers_connected_services()}</h2>
@@ -728,6 +763,19 @@ async function copyProvider(): Promise<void> {
 </div>
 
 <ProviderEditor bind:open={editorOpen} onSaved={providerSaved} />
+<CredentialImport bind:open={importOpen} />
+<AlertDialog.Root bind:open={rtBackupOpen}>
+  <AlertDialog.Content>
+    <AlertDialog.Header>
+      <AlertDialog.Title>{m.credential_rt_backup()}</AlertDialog.Title>
+      <AlertDialog.Description>{m.credential_rt_warning()}</AlertDialog.Description>
+    </AlertDialog.Header>
+    <AlertDialog.Footer>
+      <AlertDialog.Cancel disabled={rtBackupBusy}>{m.account_reset_cancel()}</AlertDialog.Cancel>
+      <Button disabled={rtBackupBusy} onclick={() => void backupRt()}>{m.credential_rt_download()}</Button>
+    </AlertDialog.Footer>
+  </AlertDialog.Content>
+</AlertDialog.Root>
 
 <Dialog.Root
   open={reauthorizationOpen}
