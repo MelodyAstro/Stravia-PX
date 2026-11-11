@@ -243,9 +243,24 @@ def test_credential_evidence_accepts_real_preservation_boundary():
     assert checks["upstream_body_protected"]
 
 
-def test_credential_evidence_accepts_placeholder_markers_from_debug_runs():
+def test_credential_audit_reads_ordered_and_legacy_headers():
+    expected = credential_fixture()[2]
+    checks = _credential_wire(expected, [
+        {"direction": "client_to_platform", "headers": {"Authorization": "***"}},
+        {"direction": "platform_to_upstream", "headers": [
+            {"name": "Authorization", "bytes": [42, 42, 42]},
+            {"name": "x-api-key", "bytes": list(b"benchmark-only")},
+            {"name": "aUtHoRiZaTiOn", "bytes": [42, 42, 42]},
+        ]},
+    ], {"client_to_platform": b"", "platform_to_upstream": b""})
+    assert checks["client_authorization_masked"]
+    assert checks["upstream_authorization_masked"]
+    assert checks["native_credentials_preserved"]
+    assert checks["native_header_count"] == 1
+
+
+def test_credential_evidence_accepts_placeholder_markers_without_debug():
     args = credential_fixture()
-    args[1]["debug_enabled"] = True
     for discovery, reference in zip(args[1]["events"][0]["payload"]["discoveries"], args[2]["references"], strict=True):
         discovery["marker"] = reference
     assert _credential_proof(*args)["failures"] == []
@@ -254,7 +269,7 @@ def test_credential_evidence_accepts_placeholder_markers_from_debug_runs():
 @pytest.mark.parametrize("mutation", [
     "secret_discovery_leak", "reference_discovery_leak", "disabled", "missing_expectations", "missing_wire", "partial_mask",
     "discovery_absent", "discovery_count", "discovery_source", "discovery_rule",
-    "marker_without_debug", "marker_unknown",
+    "marker_unknown",
     "missing_storage", "partial_storage", "principal",
 ])
 def test_credential_proof_fails_closed_without_exposing_sensitive_values(mutation):
@@ -271,9 +286,6 @@ def test_credential_proof_fails_closed_without_exposing_sensitive_values(mutatio
         args[3] = {}
     elif mutation == "partial_mask":
         args[3]["credential_checks"]["nonce"]["client_authorization_masked"] = False
-    elif mutation == "marker_without_debug":
-        for discovery, reference in zip(args[1]["events"][0]["payload"]["discoveries"], args[2]["references"], strict=True):
-            discovery["marker"] = reference
     elif mutation == "marker_unknown":
         args[1]["debug_enabled"] = True
         args[1]["events"][0]["payload"]["discoveries"][0]["marker"] = "<!--sr:" + "c" * 28 + "-->"

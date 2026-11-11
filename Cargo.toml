@@ -1,11 +1,15 @@
 [workspace]
 resolver = "2"
-members = ["backend/crates/stravia-platform-plugin-runtime", "backend/crates/stravia-platform-plugin-sdk", "backend/crates/stravia-platform-plugin-sdk/examples/policy-tools", "backend/crates/stravia-core", "backend/crates/stravia-devtools", "backend/apps/stravia-desktop", "backend/apps/stravia-server", "backend/crates/stravia-web-access", "backend/crates/stravia-web-access-contract", "backend/crates/stravia-runtime-contract", "backend/crates/stravia-protocol-codec", "backend/crates/stravia-vendor-sdk", "backend/crates/stravia-vendor-runtime", "backend/crates/stravia-vendor-common", "backend/crates/stravia-vendor-base", "backend/crates/stravia-vendor-codex", "backend/crates/stravia-vendor-grok", "backend/crates/stravia-vendor-command-code", "backend/crates/stravia-vendor-devin", "backend/crates/stravia-vendor-opencode-free", "backend/crates/stravia-vendor-claudecode", "backend/crates/stravia-vendor-antigravity", "backend/crates/stravia-vendor-muse-code", "backend/crates/stravia-vendor-kilo", "backend/crates/stravia-media", "backend/crates/stravia-web-search", "backend/crates/stravia-credential-protection", "backend/crates/stravia-vendor-sdk/fixtures/capability-contract", "backend/crates/stravia-vendor-sdk/fixtures/lifecycle-contract", "backend/crates/stravia-vendor-sdk/fixtures/management-contract", "backend/crates/stravia-vendor-sdk/fixtures/legacy-contract"]
+exclude = ["target/patch"]
+members = ["backend/crates/stravia-platform-plugin-runtime", "backend/crates/stravia-platform-plugin-sdk", "backend/crates/stravia-platform-plugin-sdk/examples/policy-tools", "backend/crates/stravia-core", "backend/crates/stravia-devtools", "backend/apps/stravia-desktop", "backend/apps/stravia-server", "backend/crates/stravia-web-access", "backend/crates/stravia-web-access-contract", "backend/crates/stravia-runtime-contract", "backend/crates/stravia-protocol-codec", "backend/crates/stravia-vendor-sdk", "backend/crates/stravia-vendor-runtime", "backend/crates/stravia-vendor-common", "backend/crates/stravia-vendor-base", "backend/crates/stravia-vendor-codex", "backend/crates/stravia-vendor-grok", "backend/crates/stravia-vendor-command-code", "backend/crates/stravia-vendor-devin", "backend/crates/stravia-vendor-opencode-free", "backend/crates/stravia-vendor-claudecode", "backend/crates/stravia-vendor-antigravity", "backend/crates/stravia-media", "backend/crates/stravia-web-search", "backend/crates/stravia-credential-protection", "backend/crates/stravia-vendor-sdk/fixtures/capability-contract", "backend/crates/stravia-vendor-sdk/fixtures/lifecycle-contract", "backend/crates/stravia-vendor-sdk/fixtures/management-contract", "backend/crates/stravia-vendor-sdk/fixtures/manual-contract", "backend/crates/stravia-vendor-sdk/fixtures/net-1.0-compat", "backend/crates/stravia-vendor-sdk/fixtures/state-contract"]
 # 与 dev:server 保持相同的依赖特性图，避免裸 build 先构建桌面特性并集。
 default-members = ["backend/apps/stravia-server"]
 
+[workspace.metadata.patch]
+crates = ["rustls@0.23.46", "rama-http-core@0.4.0", "rama-http-types@0.4.0"]
+
 [workspace.package]
-version = "0.6.4"
+version = "0.6.5"
 edition = "2024"
 rust-version = "1.99.0"
 license = "AGPL-3.0-only"
@@ -33,6 +37,7 @@ sse-stream = "=0.2.6"
 # 与桌面更新器统一 TLS/代理编译特性；运行时代理由客户端显式选择。
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "system-proxy", "socks"] }
 reqwest-websocket = "0.6"
+cookie_store = { version = "=0.22.1", default-features = false }
 # 固定 Codex 使用的 RFC 7692 实现；不全局替换其他客户端的 WebSocket 依赖。
 tungstenite-deflate = { package = "tungstenite", git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f", default-features = false, features = ["deflate", "handshake"] }
 tokio-tungstenite-deflate = { package = "tokio-tungstenite", git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186", default-features = false }
@@ -79,6 +84,10 @@ base64 = "0.23"
 base64-022 = { package = "base64", version = "0.22.1" }
 rand = "0.10"
 sha2 = "0.11"
+sha1 = "0.11"
+md-5 = "0.11"
+hex = "0.4"
+hpack = "0.3"
 argon2 = { version = "0.6", features = ["getrandom"] }
 jsonwebtoken = { version = "11", default-features = false }
 rpassword = "7.5"
@@ -95,7 +104,17 @@ wreq = { version = "=0.16.1", default-features = false, features = ["tokio-rt", 
 wreq-util = "=0.2.0"
 http = "1"
 tokio-rustls = "0.26.4"
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
+aws-lc-rs = "1.18.1"
 rustls-platform-verifier = "0.7"
+brotli-decompressor = "5.0.3"
+rama-core = { version = "=0.4.0", features = ["std"] }
+rama-http = "=0.4.0"
+rama-http-core = "=0.4.0"
+rama-http-types = "=0.4.0"
+rama-net = "=0.4.0"
+percent-encoding = "2"
+hyper-util = { version = "0.1.21", features = ["client-proxy"] }
 numbat = { version = "1.24.0", default-features = false, features = ["fetch-exchangerates"] }
 parking_lot = "0.12.5"
 # 避免碎片化主机上的透明大页缺页触发同步内存整理，不改系统 THP 配置。
@@ -182,6 +201,11 @@ debug = 1
 # 固定这两个包，避免仅切换 workspace 成员就让原生 TLS 构建失效。
 [profile.dev.package."bitflags@2"]
 debug = true
+
+[patch.crates-io]
+rustls = { path = "target/patch/rustls-0.23.46" }
+rama-http-core = { path = "target/patch/rama-http-core-0.4.0" }
+rama-http-types = { path = "target/patch/rama-http-types-0.4.0" }
 
 [profile.dev.package.glob]
 debug = true

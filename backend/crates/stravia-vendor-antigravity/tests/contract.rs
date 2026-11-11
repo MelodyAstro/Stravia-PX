@@ -24,8 +24,8 @@ use stravia_runtime_contract::protocol::{
 };
 use stravia_runtime_contract::{CancellationToken, Deadline};
 use stravia_vendor_runtime::{
-    HostFailure, HostHttpResponse, HostServices, HostWebSocket, HttpRequest, LoadedPlugin,
-    LogLevel, OperationScope, RuntimeEvent, VendorRuntime,
+    HostFailure, HostHttpResponse, HostServices, HostWebSocket, LoadedPlugin, LogLevel,
+    OperationScope, RuntimeEvent, VendorRuntime,
 };
 use stravia_vendor_sdk::{
     AllowanceBilling, AllowanceBillingKind, AllowanceBillingPeriod, AllowanceBillingPrice,
@@ -59,7 +59,7 @@ impl HostHttpResponse for HttpResponse {
     async fn status(&self) -> Result<u16, HostFailure> {
         Ok(self.response().await?.lock().await.status().as_u16())
     }
-    async fn headers(&self) -> Result<Vec<(String, String)>, HostFailure> {
+    async fn headers(&self) -> Result<Vec<stravia_vendor_sdk::net::Field>, HostFailure> {
         Ok(self
             .response()
             .await?
@@ -67,7 +67,10 @@ impl HostHttpResponse for HttpResponse {
             .await
             .headers()
             .iter()
-            .map(|(key, value)| (key.to_string(), value.to_str().unwrap().into()))
+            .map(|(key, value)| stravia_vendor_sdk::net::Field {
+                name: key.to_string(),
+                bytes: value.as_bytes().to_vec(),
+            })
             .collect())
     }
     async fn read_body(&self) -> Result<Option<Vec<u8>>, HostFailure> {
@@ -175,6 +178,31 @@ async fn upstream(
         "/v1internal:retrieveUserQuotaSummary" => {
             json!({"groups":[{"displayName":"Gemini","buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.7,"resetTime":"2026-01-01T00:00:00Z"}]}],"buckets":[{"bucketId":"gemini-5h","window":"5h","remainingFraction":0.7}]})
         }
+        "/v1internal:generateContent" => {
+            if fixture.error_stream.load(Ordering::Relaxed) {
+                return (
+                    [("retry-after", "9")],
+                    axum::Json(json!({"error":{"code":429,"message":"rate limit"}})),
+                )
+                    .into_response();
+            }
+            if let Some(refusal) = fixture.image_refusal.lock().as_ref() {
+                return axum::Json(refusal.clone()).into_response();
+            }
+            let mut response = json!({"response":{
+                "candidates":[{"content":{"role":"model","parts":[{
+                    "inlineData":{"mimeType":"image/png","data":IMAGE_PNG}
+                }]},"finishReason":"STOP"}],
+                "usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":13,"totalTokenCount":20}
+            }});
+            if fixture.truncated.load(Ordering::Relaxed) {
+                response["response"]["candidates"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("finishReason");
+            }
+            response
+        }
         "/v1internal:streamGenerateContent" => {
             if fixture.error_stream.load(Ordering::Relaxed) {
                 return (
@@ -203,32 +231,6 @@ async fn upstream(
                     }
                 }
             }
-            if request.pointer("/request/generationConfig/responseModalities")
-                == Some(&json!(["IMAGE"]))
-            {
-                if let Some(refusal) = fixture.image_refusal.lock().as_ref() {
-                    return (
-                        [("content-type", "text/event-stream")],
-                        format!("data: {refusal}\n\n"),
-                    )
-                        .into_response();
-                }
-                let image = json!({"response":{
-                    "candidates":[{"index":0,"content":{"role":"model","parts":[{
-                        "inlineData":{"mimeType":"image/png","data":IMAGE_PNG}
-                    }]}}],
-                    "usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":13,"totalTokenCount":20}
-                }});
-                let finish = json!({"response":{
-                    "candidates":[{"index":0,"finishReason":"STOP"}],
-                    "usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":13,"totalTokenCount":20}
-                }});
-                let mut stream = format!("data: {image}\r\n\r\n");
-                if !fixture.truncated.load(Ordering::Relaxed) {
-                    stream.push_str(&format!("data: {finish}\n\n"));
-                }
-                return ([("content-type", "text/event-stream")], stream).into_response();
-            }
             let first = "data: {\"response\":{\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"真实 HTTP 冒烟\"}]}}],\"usageMetadata\":{\"promptTokenCount\":5,\"candidatesTokenCount\":8,\"totalTokenCount\":13}}}\r\n\r\n";
             let last = "data: {\"response\":{\"candidates\":[{\"index\":0,\"content\":{\"role\":\"model\",\"parts\":[{\"functionCall\":{\"name\":\"read\",\"args\":{\"metadata\":{\"seed\":7}}},\"thoughtSignature\":\"genuine-signature\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":5,\"candidatesTokenCount\":8,\"totalTokenCount\":13}}}\n\n";
             let body = if fixture.truncated.load(Ordering::Relaxed) {
@@ -250,7 +252,18 @@ struct Services {
 }
 #[async_trait]
 impl HostServices for Services {
-    fn http_start(&self, request: HttpRequest) -> Result<Arc<dyn HostHttpResponse>, HostFailure> {
+    fn validate_net_option(
+        &self,
+        key: &str,
+        value: &str,
+    ) -> Result<(), stravia_vendor_sdk::net::OptionError> {
+        stravia_vendor_sdk::net::validate_host_option(key, value)
+    }
+    fn http_start(
+        &self,
+        request: stravia_vendor_sdk::net::Request,
+        _options: stravia_vendor_sdk::net::Options,
+    ) -> Result<Arc<dyn HostHttpResponse>, HostFailure> {
         let url = url::Url::parse(&request.url).unwrap();
         assert!(matches!(
             url.host_str(),
@@ -272,8 +285,17 @@ impl HostServices for Services {
                 local,
             )
             .body(request.body);
-        for (key, value) in request.headers {
-            builder = builder.header(key, value);
+        for field in request.headers.into_vec() {
+            if field.bytes.is_empty()
+                && (field.name.eq_ignore_ascii_case("host")
+                    || field.name.eq_ignore_ascii_case("content-length"))
+            {
+                continue;
+            }
+            builder = builder.header(
+                field.name,
+                reqwest::header::HeaderValue::from_bytes(&field.bytes).unwrap(),
+            );
         }
         Ok(Arc::new(HttpResponse {
             client: self.client.clone(),
@@ -283,7 +305,8 @@ impl HostServices for Services {
     }
     async fn ws_connect(
         &self,
-        _: stravia_vendor_runtime::WsRequest,
+        _: stravia_vendor_sdk::net::ConnectRequest,
+        _: stravia_vendor_sdk::net::Options,
     ) -> Result<Arc<dyn HostWebSocket>, HostFailure> {
         Err(HostFailure::new(
             ErrorKind::Unsupported,
@@ -487,22 +510,32 @@ async fn native_images_preserve_selected_model_and_references_at_real_http_bound
         assert_eq!(usage.completion_tokens, 13);
         let received = fixture.received.lock();
         let (url, headers, bytes) = received.last().unwrap();
-        assert_eq!(url, "/v1internal:streamGenerateContent?alt=sse");
+        assert_eq!(url, "/v1internal:generateContent");
         assert_eq!(headers["authorization"], "Bearer test-token");
+        assert!(!headers.contains_key("transfer-encoding"));
         assert!(!headers.contains_key("x-downstream-secret"));
         let envelope: Value = serde_json::from_slice(bytes).unwrap();
         assert_eq!(envelope["model"], "account-image");
         assert_eq!(envelope["project"], "test-project");
+        assert_eq!(envelope["requestType"], "image_gen");
+        assert!(
+            envelope["requestId"]
+                .as_str()
+                .unwrap()
+                .starts_with("image_gen/")
+        );
+        assert!(envelope["request"].get("systemInstruction").is_none());
         assert_eq!(
             envelope["request"]["generationConfig"],
             json!({
-                "responseModalities":["IMAGE"],"candidateCount":1,
+                "candidateCount":1,
                 "imageConfig":{"aspectRatio":"16:9","imageSize":"2K"}
             })
         );
         let parts = envelope["request"]["contents"][0]["parts"]
             .as_array()
             .unwrap();
+        assert!(parts[0].get("text").is_some());
         let returned_references: Vec<_> = parts
             .iter()
             .filter_map(|part| part.get("inlineData"))
@@ -561,9 +594,8 @@ async fn native_images_preserve_selected_model_and_references_at_real_http_bound
     .unwrap_err();
     assert_eq!(error.diagnostic_message(), Some(failure_message));
     assert_ne!(error.model_error_kind(), Some(AiErrorKind::ContentFiltered));
-    *fixture.image_refusal.lock() = Some(
-        json!({"response":{"candidates":[{"content":{},"finishMessage":"The image is still being generated"}]}}),
-    );
+    *fixture.image_refusal.lock() =
+        Some(json!({"response":{"candidates":[{"content":{},"finishMessage":failure_message}]}}));
     let error = run(
         &runtime,
         &plugin,
@@ -575,7 +607,8 @@ async fn native_images_preserve_selected_model_and_references_at_real_http_bound
     )
     .await
     .unwrap_err();
-    assert_eq!(error.model_error_kind(), Some(AiErrorKind::UnexpectedEof));
+    assert_eq!(error.model_error_kind(), Some(AiErrorKind::ServerError));
+    assert_eq!(error.diagnostic_message(), Some(failure_message));
     *fixture.image_refusal.lock() = None;
     fixture.truncated.store(true, Ordering::Relaxed);
     let error = run(
@@ -984,9 +1017,15 @@ async fn oauth_and_inference_enforce_native_wire_at_real_http_boundary() {
             .unwrap();
         assert!(!headers.contains_key("x-downstream-secret"));
         assert!(!headers.contains_key("x-goog-api-client"));
+        assert_eq!(headers["transfer-encoding"], "chunked");
+        assert_eq!(headers["accept-encoding"], "gzip");
         let body: Value = serde_json::from_slice(body).unwrap();
         assert_eq!(body["project"], "test-project");
         assert_eq!(body["model"], "account-model");
+        assert_eq!(
+            body["request"]["generationConfig"]["maxOutputTokens"],
+            65536
+        );
         assert_eq!(body["request"]["sessionId"], "-2713670015314466186");
         let request_id = body["requestId"].as_str().unwrap();
         let native_id = uuid::Uuid::parse_str(request_id.strip_prefix("agent/").unwrap()).unwrap();
@@ -1019,6 +1058,29 @@ async fn oauth_and_inference_enforce_native_wire_at_real_http_boundary() {
                 .encode(sha2::Sha256::digest(verifier.as_bytes())),
             query["code_challenge"]
         );
+    }
+    {
+        let mut zero_limit = request.clone();
+        zero_limit.generation.max_tokens = Some(0);
+        run(
+            &runtime,
+            &plugin,
+            &services,
+            OperationInput::Infer {
+                provider: provider.clone(),
+                request: zero_limit,
+            },
+        )
+        .await
+        .unwrap();
+        let received = fixture.received.lock();
+        let (_, _, bytes) = received
+            .iter()
+            .rev()
+            .find(|(url, _, _)| url.starts_with("/v1internal:streamGenerateContent"))
+            .unwrap();
+        let body: Value = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(body["request"]["generationConfig"]["maxOutputTokens"], 0);
     }
     let openai = stravia_runtime_contract::protocol::ids::OPENAI_COMPATIBLE_CHAT_COMPLETIONS_V1;
     let openai_request = ProtocolTransform::global()
@@ -1222,9 +1284,9 @@ async fn oauth_and_inference_enforce_native_wire_at_real_http_boundary() {
             assert_eq!(
                 envelope.pointer("/request/generationConfig/thinkingConfig/thinkingLevel"),
                 Some(&json!(match effort {
-                    Some("low") => 1,
-                    Some("medium") => 2,
-                    Some("high") | None => 3,
+                    Some("low") => "LOW",
+                    Some("medium") => "MEDIUM",
+                    Some("high") | None => "HIGH",
                     _ => unreachable!(),
                 }))
             );
@@ -1254,6 +1316,15 @@ async fn oauth_and_inference_enforce_native_wire_at_real_http_boundary() {
             true,
         ),
         (Some("HIGH"), None, None, Some(json!("HIGH")), None, false),
+        (
+            Some("XHIGH"),
+            None,
+            None,
+            Some(json!("EXTRA_HIGH")),
+            None,
+            true,
+        ),
+        (Some("MAX"), None, None, Some(json!("MAX")), None, true),
         (None, Some(2048), None, None, Some(json!(2048)), true),
         (
             Some("HIGH"),
@@ -1263,7 +1334,7 @@ async fn oauth_and_inference_enforce_native_wire_at_real_http_boundary() {
                     value: "medium".into(),
                 },
             ),
-            Some(json!(2)),
+            Some(json!("MEDIUM")),
             None,
             true,
         ),
@@ -1338,6 +1409,60 @@ async fn oauth_and_inference_enforce_native_wire_at_real_http_boundary() {
         assert_eq!(
             envelope.pointer("/request/generationConfig/thinkingConfig/includeThoughts"),
             Some(&json!(summary))
+        );
+    }
+    for (number, name) in [
+        (0, "UNSPECIFIED"),
+        (1, "LOW"),
+        (2, "MEDIUM"),
+        (3, "HIGH"),
+        (4, "MINIMAL"),
+        (5, "EXTRA_HIGH"),
+        (6, "MAX"),
+    ] {
+        let mut selected_provider = provider.clone();
+        selected_provider.model_metadata = Some(stravia_vendor_sdk::ModelMetadata {
+            extensions: BTreeMap::from([(
+                "antigravity".into(),
+                json!({"default":"flash", "variants":[{
+                    "id":"flash", "effort":"medium", "metadata":{"thinkingLevel":number}
+                }]}),
+            )]),
+            ..Default::default()
+        });
+        let mut selected_request = request.clone();
+        selected_request.reasoning.target_control = Some(
+            stravia_runtime_contract::thinking::TargetThinkingControl::Effort {
+                value: "medium".into(),
+            },
+        );
+        run(
+            &runtime,
+            &plugin,
+            &services,
+            OperationInput::Infer {
+                provider: selected_provider,
+                request: selected_request,
+            },
+        )
+        .await
+        .unwrap();
+        let received = fixture.received.lock();
+        let (_, _, bytes) = received
+            .iter()
+            .rev()
+            .find(|(url, _, _)| url.starts_with("/v1internal:streamGenerateContent"))
+            .unwrap();
+        let envelope: Value = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(envelope["model"], "flash");
+        assert_eq!(
+            envelope["request"]["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            name
+        );
+        assert!(
+            envelope
+                .pointer("/request/generationConfig/thinkingConfig/thinkingBudget")
+                .is_none()
         );
     }
     for metadata in [

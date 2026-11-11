@@ -3,41 +3,43 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="frontend/stravia-webui/static/stravia-logo-reversed.svg">
   <source media="(prefers-color-scheme: light)" srcset="frontend/stravia-webui/static/stravia-logo.svg">
-  <img alt="Stravia" src="frontend/stravia-webui/static/stravia-logo.svg" width="96">
+  <img alt="Strinova" src="frontend/stravia-webui/static/stravia-logo.svg" width="96">
 </picture>
 
-<h1>Stravia</h1>
+<h1>Strinova</h1>
 
 **Local agent infrastructure — one endpoint for every AI client.**<br>
 Unified model access, tools that run for you, and shared access control,<br>
 history, and usage — desktop app or single binary.
 
-[![Release](https://img.shields.io/github/v/release/Stravia-AI/StraviaPlatform)](https://github.com/Stravia-AI/StraviaPlatform/releases)
+[![Upstream release](https://img.shields.io/github/v/release/Stravia-AI/StraviaPlatform)](https://github.com/Stravia-AI/StraviaPlatform/releases)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
-[![CI](https://github.com/Stravia-AI/StraviaPlatform/actions/workflows/ci.yml/badge.svg)](https://github.com/Stravia-AI/StraviaPlatform/actions/workflows/ci.yml)
+[![CI](https://github.com/MelodyAstro/Strinova/actions/workflows/px-native-linux.yml/badge.svg)](https://github.com/MelodyAstro/Strinova/actions/workflows/px-native-linux.yml)
 [![Rust](https://img.shields.io/badge/rust-toolchain-orange)](rust-toolchain.toml)
 
 [Releases](https://github.com/Stravia-AI/StraviaPlatform/releases) · [Changelog](CHANGELOG.md) · [中文文档](README_CN.md)
 
 </div>
 
-> **Stravia-PX:** This fork adds per-API-Key request model mappings, limited request recognition, and Claude/Codex compatibility patches. See [fork configuration and native upgrade instructions](px/README.md).
+> **Source and license:** Strinova is a derivative of [StraviaPlatform](https://github.com/Stravia-AI/StraviaPlatform) by Stravia-AI, based on upstream **v0.6.5**. Upstream authors retain their copyrights; this fork retains the [AGPL-3.0-only license](LICENSE). Our repository is [MelodyAstro/Strinova](https://github.com/MelodyAstro/Strinova).
+
+> **Strinova:** This fork adds per-API-Key request model mappings, limited request recognition, and Claude/Codex compatibility patches. See [fork configuration and native upgrade instructions](px/README.md).
 
 ![Request Records — every client request, traced live](docs/assets/request-records.png)
 
-> **Status:** Stravia is pre-1.0 and under active development. Configuration and database compatibility may change before a stable release.
+> **Status:** Strinova is pre-1.0 and under active development. Configuration and database compatibility may change before a stable release.
 
-## What is Stravia
+## What is Strinova
 
-Stravia is local, self-hostable **agent infrastructure** for developers who use AI coding clients or build agent-powered apps. Your clients keep the protocol they already speak — OpenAI, Anthropic, or Gemini — and simply point at Stravia. Stravia decides which upstream service should answer and translates between protocols when needed.
+Strinova is local, self-hostable **agent infrastructure** for developers who use AI coding clients or build agent-powered apps. Your clients keep the protocol they already speak — OpenAI, Anthropic, or Gemini — and simply point at Strinova. Strinova decides which upstream service should answer and translates between protocols when needed.
 
-On top of model access, the platform runs tools itself: built-in web search and media understanding execute inside Stravia and hand results back to the model — through ordinary model requests or MCP, no client plugins required. Access control, request history, usage, and diagnostics all live in the same place.
+On top of model access, the platform runs tools itself: built-in web search and media understanding execute inside Strinova and hand results back to the model — through ordinary model requests or MCP, no client plugins required. Access control, request history, usage, and diagnostics all live in the same place.
 
 ```text
 Claude Code · Codex CLI · Gemini CLI · OpenCode · SDKs
                             │
                             ▼
-              Stravia unified listener :23471
+              Strinova unified listener :23471
                 ├─ OpenAI-compatible API
                 ├─ Anthropic Messages API
                 ├─ Gemini GenerateContent API
@@ -50,31 +52,22 @@ Claude Code · Codex CLI · Gemini CLI · OpenCode · SDKs
  OpenAI · Anthropic · Google · Vertex AI · DeepSeek · Ollama · …
 ```
 
-Agent behavior is defined and versioned by the platform — Stravia is not a user-defined agent or visual workflow builder.
+Agent behavior is defined and versioned by the platform — Strinova is not a user-defined agent or visual workflow builder.
 
-## Why Stravia
+## Why Strinova
 
-- **Drop-in endpoint for AI coding clients** — point Claude Code, Codex CLI, Gemini CLI, or OpenCode at `127.0.0.1:23471` and keep working. Each client keeps its own protocol; Stravia handles translation, routing, and failover.
-- **Tools that run for you** — built-in web search (local search uses an installed Chrome/Chromium browser; the container includes Chromium) and image understanding execute inside Stravia and hand results back to the model. Expose them over MCP or add them automatically to compatible requests.
+- **Drop-in endpoint for AI coding clients** — point Claude Code, Codex CLI, Gemini CLI, or OpenCode at `127.0.0.1:23471` and keep working. Each client keeps its own protocol; Strinova handles translation, routing, and failover.
+- **Tools that run for you** — built-in web search (local search uses an installed Chrome/Chromium browser; the container includes Chromium) and image understanding execute inside Strinova and hand results back to the model. Expose them over MCP or add them automatically to compatible requests.
 - **Keys, spend, and request history in one place** — give each app its own key with model access and RPM limits, see the usage providers actually report, watch every request live, and download a full debug bundle when something goes wrong.
 - **Local-first, one Rust core** — a desktop app or a headless server binary; SQLite by default, PostgreSQL for teams; local or S3 file storage. No cloud dependency.
 
 ## Quick Start
 
-**Desktop** — download the Windows (NSIS), Linux (AppImage), or macOS (DMG, Intel / Apple Silicon) installer from [GitHub Releases](https://github.com/Stravia-AI/StraviaPlatform/releases). The full platform runs locally with an integrated management UI. macOS builds use Ad-hoc signing without Apple notarization; Gatekeeper may block the first launch. See [release and signing details](docs/releasing.md#macos-构建与独立验证).
+**Upstream desktop** — download the Windows (NSIS), Linux (AppImage), or macOS (DMG, Intel / Apple Silicon) installer from [GitHub Releases](https://github.com/Stravia-AI/StraviaPlatform/releases). The full platform runs locally with an integrated management UI. macOS builds use Ad-hoc signing without Apple notarization; Gatekeeper may block the first launch. See [release and signing details](docs/releasing.md#macos-构建与独立验证).
 
 If startup fails, the desktop app provides diagnostics and recovery options; it does not automatically reset your database.
 
-**Server** — one container:
-
-```bash
-docker run --rm \
-  --publish 127.0.0.1:23471:23471 \
-  --mount source=stravia-data,target=/data \
-  ghcr.io/stravia-ai/straviaplatform:latest
-```
-
-Alternatively, download a platform archive from Releases (verify against `SHA256SUMS`).
+**Server** — use the native GNU package from [Strinova CI](https://github.com/MelodyAstro/Strinova/actions/workflows/px-native-linux.yml). No Docker is required. Verify the manifest and SHA256 before installation; see [native installation and upgrades](px/README.md).
 
 **Nix / NixOS (Linux Server only):** Build this checkout with `nix build .#stravia-server`, or import `nixosModules.default` and enable `services.stravia`. See [Nix deployment](docs/design/architecture.md#nix-server-与-nixos-服务).
 
@@ -83,9 +76,9 @@ Alternatively, download a platform archive from Releases (verify against `SHA256
 **First run (both):**
 
 1. Open <http://127.0.0.1:23471/setup> and paste the one-time setup token printed to the console. Pick SQLite or PostgreSQL and create the administrator. PostgreSQL requires Redis configured before setup; see [cache and Server configuration](docs/design/architecture.md#统一派生缓存与-server-配置).
-2. **Add a provider** — API key or OAuth channel (Codex, Claude subscription, Grok device flow, Devin). Stravia syncs the available model inventory.
+2. **Add a provider** — API key or OAuth channel (Codex, Claude subscription, Grok device flow, Devin). Strinova syncs the available model inventory.
 3. **Add a model** — choose text or image output, then select matching upstream models; the Model ID is the route clients call.
-4. **Create an API key**, then open **Connect clients** — Stravia generates a ready-to-apply provider patch for Claude Code, Codex CLI, Gemini CLI, or OpenCode; the desktop app can write the config for you.
+4. **Create an API key**, then open **Connect clients** — Strinova generates a ready-to-apply provider patch for Claude Code, Codex CLI, Gemini CLI, or OpenCode; the desktop app can write the config for you.
 
 Then call it through any supported protocol:
 
@@ -117,13 +110,13 @@ OpenAI (incl. Codex OAuth) · Anthropic (API key; Claude Pro/Max subscription OA
 
 Clients call a **Model ID** you define — map it to one or more upstreams in priority layers: requests go to the top layer first, balanced by traffic or preferring the fastest target, and a conversation sticks to what worked before. A built-in catalog keeps provider model lists up to date.
 
-When an upstream service is temporarily unavailable, Stravia retries or switches services according to your route configuration. The management UI shows each target's availability.
+When an upstream service is temporarily unavailable, Strinova retries or switches services according to your route configuration. The management UI shows each target's availability.
 
 ![Editing a model — upstream targets in priority layers](docs/assets/model-routing.png)
 
 ### Platform tools and built-in agent runtime
 
-- `StraviaRead` — one tool, one `path`: read files, webpages, `search://` questions, and images; Office documents (DOCX/XLSX/PPTX/DOC/XLS/PPT) read as extracted Markdown; long results page through automatically.
+- `StrinovaRead` — one tool, one `path` plus a plain-text `question`: read files, webpages, research questions, and images with no URL encoding; Office documents (DOCX/XLSX/PPTX/DOC/XLS/PPT) read as extracted Markdown; long results page through automatically.
 - **Web Search** — use the Local agent loop with a browser-backed Local source, Exa, or Zhipu, or bind an External Route whose Vendor plugin returns a complete cited report.
 - **Media Understanding** — describe images and extract text (JPEG/PNG/WebP) or answer questions about Office documents with the vision model you choose.
 - **Media Generation** — generate or edit an image through a saved Route backed by a capable Vendor plugin, then reuse its Artifact Reference in later tools.
@@ -137,7 +130,7 @@ Availability depends on upstream account and model support. Size preferences do 
 
 ### Vendor plugins
 
-All model Vendors run as self-contained Wasm Components. Stravia embeds the base Vendor; Codex, Claude Code, Grok, Command Code, and Devin are dedicated plugins distributed as separate Release attachments. Import the corresponding local `.wasm` file in **Vendor Plugins** before adding a connection. Dedicated plugins own their full supplier identity and never fall back to the base package.
+All model Vendors run as self-contained Wasm Components. Strinova embeds the base Vendor; Codex, Claude Code, Grok, Command Code, and Devin are dedicated plugins distributed as separate Release attachments. Import the corresponding local `.wasm` file in **Vendor Plugins** before adding a connection. Dedicated plugins own their full supplier identity and never fall back to the base package.
 
 **Vendor Plugins** also supports local plugin updates without a marketplace. A plugin is trusted with the selected connection's upstream credentials and approved network destinations, so review its source and requested origins before use. See the [plugin design](docs/design/vendor-plugins.md) for setup, supported capabilities, isolation, updates, and lifecycle details.
 
@@ -152,10 +145,10 @@ All model Vendors run as self-contained Wasm Components. Stravia embeds the base
 
 ### Credential protection
 
-Off by default — turn it on once and it covers every Stravia API key, with nothing to change in your clients.
+Off by default — turn it on once and it covers every Strinova API key, with nothing to change in your clients.
 
-- **Secrets stay on your machine** — Stravia recognizes API keys, tokens, and other credentials in messages, history, and tool inputs and outputs bound for a model, and swaps them for placeholders before the request goes out. All 461 detection rules are bundled and run locally — nothing is sent anywhere to be checked.
-- **Replies still work end to end** — when a provider echoes a placeholder back, Stravia restores the real value in the answer and in tool calls, so tools can keep using the credential. The same secret keeps the same placeholder across conversations and restarts.
+- **Secrets stay on your machine** — Strinova recognizes API keys, tokens, and other credentials in messages, history, and tool inputs and outputs bound for a model, and swaps them for placeholders before the request goes out. All 461 detection rules are bundled and run locally — nothing is sent anywhere to be checked.
+- **Replies still work end to end** — when a provider echoes a placeholder back, Strinova restores the real value in the answer and in tool calls, so tools can keep using the credential. The same secret keeps the same placeholder across conversations and restarts.
 - **Fails safe, never silently** — if detection or storage breaks, the request fails instead of shipping your plaintext. Turning it off stops new replacements; placeholders already issued still restore until they expire.
 - **Visible and testable** — browse the full rule list, see which credentials each request caught, and try your own text against the detector — test input stays on this instance and is never saved.
 
@@ -189,6 +182,8 @@ Rust toolchain: [`rust-toolchain.toml`](rust-toolchain.toml) · Bun `1.4.2` · T
 
 Project JavaScript development, build, and test commands use Bun. Rust and Python tests retain their native runners.
 
+Before invoking Cargo directly or opening the workspace in an IDE, run `task prepare:crates` (requires Cargo and Git). It installs the pinned `patch-crate` tool when needed and prepares the patched dependencies; Task's Rust commands do this automatically. Run it again after `cargo clean`. Preparation must finish before builds start; do not refresh patched sources during a build. Patch updates and offline source setup are described in the [architecture documentation](docs/design/architecture.md#61-descriptor-与操作入口).
+
 | Command                  | Purpose                                                     |
 | ------------------------ | ----------------------------------------------------------- |
 | `task dev:server`        | Start the Vite WebUI and standalone debug server            |
@@ -199,7 +194,7 @@ Project JavaScript development, build, and test commands use Bun. Rust and Pytho
 
 ## License
 
-Stravia is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`).
+Strinova is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`).
 Separately licensed components retain their own terms: `stravia-web-access` is `CC0-1.0 AND MIT` ([Cargo.toml](backend/crates/stravia-web-access/Cargo.toml)); its browser stealth scripts retain their [MIT license](backend/crates/stravia-web-access/src/browser/stealth/LICENSE). Bundled fonts retain their respective licenses.
 
 ## Star History

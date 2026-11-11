@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use stravia_runtime_contract::protocol::ids::{
     OPENAI_COMPATIBLE_CHAT_COMPLETIONS_V1, OPENAI_COMPATIBLE_EMBEDDINGS_V1,
 };
-use stravia_vendor_sdk::wit::types::HttpRequest;
+use stravia_vendor_sdk::net::Request;
 use stravia_vendor_sdk::{
     AuthResponse, AuthStep, Capability, ChannelDescriptor, ConfigField, ConfigFieldKind,
     ConfigGroup, ConfigValidationResponse, ConnectionCheckResponse, ConnectionCheckVerification,
@@ -148,7 +148,7 @@ fn infer_azure(
     url.query_pairs_mut().append_pair("api-version", &version);
     let api_key = required_string(provider, "apiKey", "Azure API key is required")?;
     let mut headers = common::header_pairs(&encoded.headers)?;
-    set_header(&mut headers, "api-key", api_key);
+    headers.set("api-key", api_key);
     send_inference(
         host,
         &protocol,
@@ -169,9 +169,9 @@ fn infer_bedrock(
     let url = common::endpoint_url(&provider.base_url, &encoded.path)?;
     let body = json_body(encoded.body)?;
     let mut headers = common::header_pairs(&encoded.headers)?;
-    set_header(&mut headers, "content-type", "application/json");
+    headers.set("content-type", "application/json");
     if let Some(api_key) = string_value(provider, "apiKey") {
-        set_header(&mut headers, "authorization", format!("Bearer {api_key}"));
+        headers.set("authorization", format!("Bearer {api_key}"));
     } else {
         sign_bedrock(provider, &url, &body, &mut headers)?;
     }
@@ -199,7 +199,7 @@ fn infer_vertex(
     };
     let (token, _) = vertex_access_token(host, provider, true)?;
     let mut headers = common::header_pairs(&encoded.headers)?;
-    set_header(&mut headers, "authorization", format!("Bearer {token}"));
+    headers.set("authorization", format!("Bearer {token}"));
     send_inference(
         host,
         protocol,
@@ -236,7 +236,7 @@ fn infer_vertex_anthropic(
     );
     let (token, _) = vertex_access_token(host, provider, true)?;
     let mut headers = common::header_pairs(&encoded.headers)?;
-    set_header(&mut headers, "authorization", format!("Bearer {token}"));
+    headers.set("authorization", format!("Bearer {token}"));
     send_inference(
         host,
         "anthropic-messages",
@@ -258,9 +258,9 @@ fn infer_sap(
     let url = common::endpoint_url(&provider.base_url, path)?;
     let token = sap_access_token(host, provider, true)?;
     let mut headers = common::header_pairs(&encoded.headers)?;
-    set_header(&mut headers, "authorization", format!("Bearer {token}"));
+    headers.set("authorization", format!("Bearer {token}"));
     if let Some(group) = string_value(provider, "resourceGroup") {
-        set_header(&mut headers, "AI-Resource-Group", group);
+        headers.set("AI-Resource-Group", group);
     }
     send_inference(
         host,
@@ -281,16 +281,23 @@ fn infer_gitlab(
     let encoded = crate::parameters::encode(provider, "openai-chat-completions", request)?;
     let url = common::endpoint_url(&provider.base_url, &encoded.path)?;
     let body = json_body(encoded.body)?;
-    let base_headers = common::header_pairs(&encoded.headers)?;
+    let mut headers = common::header_pairs(&encoded.headers)?;
 
     let access = gitlab_direct_access(host, provider, false, true)?;
+    headers.set("authorization", format!("Bearer {}", access.token));
+    for (name, value) in &access.headers {
+        headers.set(name.as_str(), value.as_bytes());
+    }
     host.emit_started()?;
-    let response = host.http_start(HttpRequest {
-        method: "POST".into(),
-        url,
-        headers: gitlab_headers(base_headers, &access),
-        body,
-    })?;
+    let response = host.http_start(
+        Request {
+            method: "POST".into(),
+            url,
+            headers,
+            body,
+        },
+        &crate::net_options(),
+    )?;
     let status = response.status()?;
     if status == 401 {
         // A model request may already have executed. Return the typed fact to
@@ -337,7 +344,7 @@ fn infer_watsonx(
     url.query_pairs_mut().append_pair("version", &version);
     let token = ibm_access_token(host, provider)?;
     let mut headers = common::header_pairs(&encoded.headers)?;
-    set_header(&mut headers, "authorization", format!("Bearer {token}"));
+    headers.set("authorization", format!("Bearer {token}"));
     send_inference(
         host,
         "watsonx-text-chat",
@@ -353,22 +360,22 @@ fn send_inference(
     protocol: &str,
     method: &str,
     url: &str,
-    mut headers: Vec<(String, String)>,
+    mut headers: stravia_vendor_sdk::net::Fields,
     body: Vec<u8>,
 ) -> Result<OperationOutput, PluginError> {
-    if !headers
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-    {
-        headers.push(("content-type".into(), "application/json".into()));
+    if headers.get("content-type").is_none() {
+        headers.append("content-type", "application/json");
     }
     host.emit_started()?;
-    let response = host.http_start(HttpRequest {
-        method: method.into(),
-        url: url.into(),
-        headers,
-        body,
-    })?;
+    let response = host.http_start(
+        Request {
+            method: method.into(),
+            url: url.into(),
+            headers,
+            body,
+        },
+        &crate::net_options(),
+    )?;
     crate::decode_inference(host, protocol, response)
 }
 
@@ -440,15 +447,16 @@ pub(crate) fn connection_check(
             return Err(common::unsupported("connection_check", vendor_id, channel));
         }
     };
-    let value = common_check::json(
-        host,
-        HttpRequest {
+    let response = host.http_start(
+        Request {
             method: "GET".into(),
             url,
-            headers,
+            headers: crate::fields(headers),
             body: Vec::new(),
         },
+        &crate::net_options(),
     )?;
+    let value = common_check::read_json(&response)?;
     let (keys, id_fields): (&[&str], &[&str]) = if vendor_id == "google-vertex-anthropic" {
         (
             &["models", "publisherModels", "foundationModels"],
@@ -564,12 +572,15 @@ fn discover_json(
     url: &str,
     headers: Vec<(String, String)>,
 ) -> Result<OperationOutput, PluginError> {
-    let response = host.http_start(HttpRequest {
-        method: "GET".into(),
-        url: url.into(),
-        headers,
-        body: Vec::new(),
-    })?;
+    let response = host.http_start(
+        Request {
+            method: "GET".into(),
+            url: url.into(),
+            headers: crate::fields(headers),
+            body: Vec::new(),
+        },
+        &crate::net_options(),
+    )?;
     let status = response.status()?;
     if !(200..300).contains(&status) {
         return Err(http_error(response, status));
@@ -696,12 +707,15 @@ fn discover_vertex(
     }
     let (token, _) = vertex_access_token(host, provider, true)?;
     let url = vertex_anthropic_models_url(provider, cursor)?;
-    let response = host.http_start(HttpRequest {
-        method: "GET".into(),
-        url,
-        headers: vec![("authorization".into(), format!("Bearer {token}"))],
-        body: Vec::new(),
-    })?;
+    let response = host.http_start(
+        Request {
+            method: "GET".into(),
+            url,
+            headers: crate::fields(vec![("authorization".into(), format!("Bearer {token}"))]),
+            body: Vec::new(),
+        },
+        &crate::net_options(),
+    )?;
     let status = response.status()?;
     if !(200..300).contains(&status) {
         return Err(http_error(response, status));
@@ -756,6 +770,39 @@ struct PrivateState {
     gitlab: Option<CachedGitLabAccess>,
 }
 
+impl PrivateState {
+    fn prune(&mut self, now: u64) {
+        let usable_after = now.saturating_add(300);
+        self.tokens
+            .retain(|_, token| token.expires_at_unix > usable_after);
+        if self
+            .gitlab
+            .as_ref()
+            .is_some_and(|access| access.expires_at_unix <= usable_after)
+        {
+            self.gitlab = None;
+        }
+    }
+
+    fn cache_token(&mut self, key: &str, token: CachedToken, now: u64) {
+        self.prune(now);
+        self.tokens.insert(key.into(), token);
+        // Tokens are replaceable credentials, not conversation provenance.
+        // Credential rotation must not retain every historical fingerprint.
+        while self.tokens.len() > 64 {
+            let oldest = self
+                .tokens
+                .iter()
+                .filter(|(candidate, _)| candidate.as_str() != key)
+                .min_by_key(|(candidate, token)| (token.expires_at_unix, *candidate))
+                .map(|(candidate, _)| candidate.clone());
+            if let Some(oldest) = oldest {
+                self.tokens.remove(&oldest);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedToken {
     value: String,
@@ -774,8 +821,10 @@ fn read_state(host: &GuestHost) -> Result<PrivateState, PluginError> {
     let Some(bytes) = host.read_private_state()? else {
         return Ok(PrivateState::default());
     };
-    serde_json::from_slice(&bytes)
-        .map_err(|_| common::plugin_error(ErrorKind::Invalid, "vendor private state is invalid"))
+    let mut state: PrivateState = serde_json::from_slice(&bytes)
+        .map_err(|_| common::plugin_error(ErrorKind::Invalid, "vendor private state is invalid"))?;
+    state.prune(unix_now());
+    Ok(state)
 }
 
 fn write_state(host: &GuestHost, state: &PrivateState) -> Result<(), PluginError> {
@@ -801,12 +850,14 @@ fn cache_token(
     expires_in: u64,
 ) -> Result<String, PluginError> {
     let mut state = read_state(host)?;
-    state.tokens.insert(
-        key.into(),
+    let now = unix_now();
+    state.cache_token(
+        key,
         CachedToken {
             value: value.clone(),
-            expires_at_unix: unix_now().saturating_add(expires_in),
+            expires_at_unix: now.saturating_add(expires_in),
         },
+        now,
     );
     write_state(host, &state)?;
     Ok(value)
@@ -1042,12 +1093,15 @@ fn token_post_bytes(
         "content-type",
         "application/x-www-form-urlencoded",
     );
-    let response = host.http_start(HttpRequest {
-        method: "POST".into(),
-        url: url.into(),
-        headers,
-        body,
-    })?;
+    let response = host.http_start(
+        Request {
+            method: "POST".into(),
+            url: url.into(),
+            headers: crate::fields(headers),
+            body,
+        },
+        &crate::net_options(),
+    )?;
     let status = response.status()?;
     let headers = response.headers()?;
     let bytes = read_http_body(&response, 1024 * 1024)?;
@@ -1127,15 +1181,18 @@ fn gitlab_direct_access(
         }
     }
     let url = format!("{instance}/api/v4/ai/third_party_agents/direct_access");
-    let response = host.http_start(HttpRequest {
-        method: "POST".into(),
-        url,
-        headers: vec![
-            ("authorization".into(), format!("Bearer {api_key}")),
-            ("content-type".into(), "application/json".into()),
-        ],
-        body: b"{}".to_vec(),
-    })?;
+    let response = host.http_start(
+        Request {
+            method: "POST".into(),
+            url,
+            headers: crate::fields(vec![
+                ("authorization".into(), format!("Bearer {api_key}")),
+                ("content-type".into(), "application/json".into()),
+            ]),
+            body: b"{}".to_vec(),
+        },
+        &crate::net_options(),
+    )?;
     let status = response.status()?;
     if !(200..300).contains(&status) {
         return Err(http_error(response, status));
@@ -1220,7 +1277,7 @@ fn sign_bedrock(
     provider: &ProviderSnapshot,
     url: &str,
     body: &[u8],
-    headers: &mut Vec<(String, String)>,
+    headers: &mut stravia_vendor_sdk::net::Fields,
 ) -> Result<(), PluginError> {
     let region = required_string(provider, "region", "AWS region is required")?;
     let access_key = required_string(provider, "accessKeyId", "AWS access key ID is required")?;
@@ -1232,8 +1289,17 @@ fn sign_bedrock(
     let session_token = string_value(provider, "sessionToken");
     let signable_headers = headers
         .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()))
-        .collect::<Vec<_>>();
+        .map(|field| {
+            std::str::from_utf8(&field.bytes)
+                .map(|value| (field.name.as_str(), value))
+                .map_err(|_| {
+                    common::plugin_error(
+                        ErrorKind::Invalid,
+                        "Bedrock signing requires UTF-8 header values",
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let signable = SignableRequest::new(
         "POST",
         url,
@@ -1277,7 +1343,7 @@ fn sign_bedrock(
         })?
         .into_parts();
     for (name, value) in instructions.headers() {
-        set_header(headers, name, value);
+        headers.set(name, value);
     }
     Ok(())
 }
@@ -2063,6 +2129,51 @@ fn input_mismatch() -> PluginError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_rotation_drops_expired_credentials_and_bounds_live_fingerprints() {
+        let now = 1_000;
+        let mut state = PrivateState::default();
+        for index in 0..64 {
+            state.cache_token(
+                &format!("old-{index:02}"),
+                CachedToken {
+                    value: format!("token-{index}"),
+                    expires_at_unix: now + 300 + index,
+                },
+                0,
+            );
+        }
+        state.gitlab = Some(CachedGitLabAccess {
+            config_fingerprint: "old".into(),
+            token: "expired".into(),
+            headers: Vec::new(),
+            expires_at_unix: now + 300,
+        });
+        state.cache_token(
+            "current",
+            CachedToken {
+                value: "current-token".into(),
+                expires_at_unix: now + 3_600,
+            },
+            now,
+        );
+        assert!(!state.tokens.contains_key("old-00"));
+        assert!(state.gitlab.is_none());
+        assert_eq!(state.tokens.len(), 64);
+        state.cache_token(
+            "new",
+            CachedToken {
+                value: "new-token".into(),
+                expires_at_unix: now + 3_600,
+            },
+            now,
+        );
+        assert_eq!(state.tokens.len(), 64);
+        assert!(!state.tokens.contains_key("old-01"));
+        assert_eq!(state.tokens["current"].value, "current-token");
+        assert_eq!(state.tokens["new"].value, "new-token");
+    }
 
     fn provider(base_url: &str, channel: &str) -> ProviderSnapshot {
         ProviderSnapshot {

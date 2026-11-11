@@ -74,7 +74,7 @@ type ImageGenerateOutput = {
 
 `media.width` 与 `media.height` 从实际生成文件读取，不以请求参数代填。结果不重复返回裸 Artifact ID，也不重复返回推算比例或分辨率档位。其他媒体类型的 `media` 字段随对应能力定义。
 
-新生成结果直接附带 `download_url`，不增加 `expires_at`。它使用所属 Principal 的既有 15 分钟 bearer 下载授权，固定从配置的完整 `client_base_url`（含协议、端口及部署路径）经过平台读取实际存储文件，即使开启外部签名下载也不改用 S3 或文件公开入口。此规则不改变 Provider 交付及 `StraviaRead({path: "stravia://artifacts/<artifact-id>?download=1"})` 的既有下载策略，也不回写历史结果；异步执行查询原样保留生成结果中的链接，不自动续期或重新生成。
+新生成结果直接附带 `download_url`，不增加 `expires_at`。它使用所属 Principal 的既有 15 分钟 bearer 下载授权，固定从配置的完整 `client_base_url`（含协议、端口及部署路径）经过平台读取实际存储文件，即使开启外部签名下载也不改用 S3 或文件公开入口。此规则不改变 Provider 交付及 `StraviaRead({"path": "stravia://artifacts/<artifact-id>:download"})` 的既有下载策略，也不回写历史结果；异步执行查询原样保留生成结果中的链接，不自动续期或重新生成。
 
 工具描述要求用 `![图片描述](download_url "stravia://artifacts/<artifact-id>")` 展示结果，代入实际链接和稳定 `path`；title 在链接失效后保留产物身份，不代表自动续签或重新生成。有效链接的展示不要求额外调用 Read，稳定 `path` 仍用于后续参考图复用。
 
@@ -92,7 +92,7 @@ type ImageGenerateOutput = {
 
 领域最终结果与 Marker 的本次交付结果分别持久化。常规交付由所属 Inference Run 的 ToolResult Hook 处理后封存；交付的是执行引用时，Marker 以后仍恢复该次引用，不随后台完成而替换。除系统确定的取消结果外，原请求消失导致 Hook 无法完成时，Marker 保存明确交付处理错误，不放行原始成功结果；这不取消已交接工作，也不改写其独立最终结果。后台完成不调用旧 Hook，后续查询输出由查询所属请求的 Hook 处理。
 
-用 `StraviaRead({"path":"stravia://tool-executions/<id>?wait=120"})` 查询。省略 `wait` 或设为 `0` 立即返回；正整数表示本次查询最多等待的秒数，可超过初次 60 秒窗口，但不得越过查询请求与原执行的剩余期限。完成会提前唤醒所有等待者；取消查询只停止自己的等待。重复查询不重新执行、不创建后台查询任务、不延长执行或保留期。`wait` 只适用于执行引用，不新增顶层参数；非法值、重复和未知选项明确拒绝。
+用 `StraviaRead({"path":"stravia://tool-executions/<id>","wait":120})` 查询。省略 `wait` 或设为 `0` 立即返回；正整数表示本次查询最多等待的秒数，可超过初次 60 秒窗口，但不得越过查询请求与原执行的剩余期限。完成会提前唤醒所有等待者；取消查询只停止自己的等待。重复查询不重新执行、不创建后台查询任务、不延长执行或保留期。`wait` 只适用于执行引用，其他 path 携带该字段时明确拒绝；非法值与未知字段同样明确拒绝。
 
 未完成时返回稳定 `path` 与真实 `pending` / `running` 状态；完成时返回 `{"path":"…","status":"completed","result":<原工具结果>}`。原结果中的 Artifact、报告与分页引用继续按原规则消费。原任务失败或进程重启中断时，查询本身成功，返回 `failed` / `interrupted` 与 `error`，不设置本次读取的工具错误标志。未知、过期、被清理或不属于当前 Principal 的引用是查询错误；未知与其他 Principal 的引用不泄露存在性。
 
@@ -145,13 +145,13 @@ Codex 模型发现只接受来源明确的 `media_image`、`output_modalities` /
 
 ### Antigravity 原生图片生成
 
-Antigravity 参考 OMP 的 [原生图片适配器](https://github.com/can1357/oh-my-pi/blob/main/packages/ai/src/images/google-antigravity.ts) 和 [图片模型发现](https://github.com/can1357/oh-my-pi/blob/main/packages/catalog/src/discovery/antigravity.ts)，不借用普通推理请求或 Codex 托管工具：
+Antigravity 的图片传输与请求形状以 2026-11-06 官方 agy 1.5.1 原生 `generate_image` 抓包为准；OMP 的[原生图片适配器](https://github.com/can1357/oh-my-pi/blob/main/packages/ai/src/images/google-antigravity.ts)仅作对照，不能替代官方样本。图片能力发现另参考其[发现实现](https://github.com/can1357/oh-my-pi/blob/main/packages/catalog/src/discovery/antigravity.ts)：
 
 1. 模型同步读取账号 `fetchAvailableModels` 返回的 `imageGenerationModelIds`，解析已声明的废弃 ID 重定向并过滤禁用目标；图片模型保留真实 ID，不按推理档位折叠，不创建虚拟模型或固定默认型号。广告 ID 缺少详情时保留该模型，但不猜测上下文、图片输入或推理能力。
 2. 图片专用模型登记 `media_image` 和 `modalities.output: ["image"]`；同一 ID 已有 Agent 推理能力时保留文字输出与推理选择表，并增加图片能力。`supportsImages` 只声明图片输入，不能据此赋予图片输出。
-3. 通过图片 Route 选择 Target，复用对应 Provider 的 OAuth、project 和连接设置。调用 `streamGenerateContent?alt=sse`，上游模型取 Target 的真实 selector，不在生成时另选账号广告列表中的首个型号。
-4. 原生请求使用 `responseModalities: ["IMAGE"]`、`candidateCount: 1`；有序参考图编码为 `inlineData`，比例与分辨率直映射到 `imageConfig.aspectRatio` 和 `imageConfig.imageSize`，省略的偏好不补默认值。普通推理的参数白名单保持不变。
-5. 消费 SSE 的图片 `inlineData`，要求成功终态及恰好一张图片，限制解码图片为 32 MiB；空图、非法编码、非图片 MIME、多图、截断或上游错误均不报告成功。Core 继续完整解码图片、校验实际规格并收存为 Artifact；HTTP 和流内错误沿用 Route 错误分类与重试策略。
+3. 通过图片 Route 选择 Target，复用对应 Provider 的 OAuth、project 和连接设置。调用 `POST /v1internal:generateContent`，使用定长 JSON 请求体，不请求 SSE 或 chunked。上游模型取 Target 的真实 selector，不在生成时另选账号广告列表中的首个型号。
+4. 外层使用 `requestType: image_gen`；每次独立生成使用 `image_gen/<毫秒时间戳>/<UUIDv4>/1` 请求 ID，不伪造 CLI 的共享操作树。内层只发送用户内容和生成配置：提示文本在前，有序 `inlineData` 参考图在后，`candidateCount: 1`，省略比例时采用官方默认 `imageConfig.aspectRatio: "1:1"`。不添加系统提示或 `responseModalities`。显式分辨率保留既有 `imageConfig.imageSize` 映射，但此次官方工具抓包未覆盖分辨率选项；普通 Infer 白名单不变。
+5. 通过宿主解压 gzip JSON 响应，读取图片 `inlineData`，要求 `STOP` 及恰好一张图片，限制解码图片为 32 MiB；空图、非法编码、非图片 MIME、多图、缺失终态或上游错误均不报告成功。完整 JSON 中只有 `finishMessage` 的失败保留原始诊断，不误报为流被截断；策略拒绝仍归类为 ContentFiltered。Core 继续完整解码图片、校验实际规格并收存为 Artifact；HTTP 与响应体内错误沿用 Route 错误分类与重试策略。
 
 已安装实例须重新构建并导入独立 `antigravity` 插件，再同步账号模型，随后将发现的图片模型绑定到图片 Route 并在媒体生成中选择该 Route。未固定的规格字段随同步刷新，人工固定字段不被强制覆盖；不自动创建、改绑或启用 Route。账号是否广告图片模型、配额与真实生图资格仍由上游决定，本地合约验证不能代替真实账号验证。
 

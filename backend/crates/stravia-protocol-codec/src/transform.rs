@@ -11,7 +11,7 @@ use stravia_runtime_contract::protocol::ir::AiResponse;
 use stravia_runtime_contract::protocol::ir::AiStreamDelta;
 
 mod replay;
-pub use replay::prepare_thinking_replay;
+pub use replay::{prepare_thinking_replay, prepare_thinking_replay_with_removals};
 
 pub trait ProtocolAdapter: Send + Sync + 'static {
     fn id(&self) -> ProtocolEndpoint;
@@ -175,7 +175,22 @@ impl ProtocolTransform {
             ingress: Self::inferred_ingress(canonical).unwrap_or(endpoint),
             egress: endpoint,
         };
-        prune_request(pair, canonical, capabilities)
+        prune_request(pair, canonical, capabilities, None)
+    }
+
+    /// Prune a request and report sorted indices into its original item sequence.
+    pub fn prune_request_for_with_removals(
+        endpoint: ProtocolEndpoint,
+        capabilities: &EndpointCapabilities,
+        canonical: &mut AiRequest,
+    ) -> Vec<usize> {
+        let pair = ProtocolPair {
+            ingress: Self::inferred_ingress(canonical).unwrap_or(endpoint),
+            egress: endpoint,
+        };
+        let mut removed = Vec::new();
+        prune_request(pair, canonical, capabilities, Some(&mut removed));
+        removed
     }
 
     /// Decode a unary response with a plugin-owned adapter.
@@ -252,7 +267,7 @@ impl ProtocolPair {
         mut canonical: AiRequest,
     ) -> Result<EncodedRequest, TransformError> {
         let target = adapter(self.egress)?;
-        prune_request(self, &mut canonical, target.capabilities());
+        prune_request(self, &mut canonical, target.capabilities(), None);
         let path = target.request_path(&canonical.model, canonical.stream.enabled);
         let (body, headers) =
             target
@@ -706,7 +721,12 @@ fn stream_closed(endpoint: ProtocolEndpoint, direction: TransformDirection) -> T
     }
 }
 
-fn prune_request(pair: ProtocolPair, request: &mut AiRequest, capabilities: &EndpointCapabilities) {
+fn prune_request(
+    pair: ProtocolPair,
+    request: &mut AiRequest,
+    capabilities: &EndpointCapabilities,
+    mut removed: Option<&mut Vec<usize>>,
+) {
     use stravia_runtime_contract::protocol::ir::{ResponseFormat, ToolChoice};
     // Normalize before dropping foreign protocol fidelity state.
     request.normalize_parameters();
@@ -793,22 +813,53 @@ fn prune_request(pair: ProtocolPair, request: &mut AiRequest, capabilities: &End
             request.tool_choice = None;
         }
         request.meta.vendor.passthrough_safe.clear();
+        let mut index = 0;
         request.items.retain(|item| {
-            item.unknown_ref().is_none()
+            let original_index = index;
+            index += 1;
+            let keep = item.unknown_ref().is_none()
                 && (pair.egress.protocol == Protocol::OpenResponses
                     || (!item.is_compaction_trigger()
                         && (!item.is_compaction()
                             || pair.egress.protocol == Protocol::AnthropicMessages
-                                && compaction_summary(item).is_some())))
+                                && compaction_summary(item).is_some())));
+            if !keep && let Some(removed) = removed.as_deref_mut() {
+                removed.push(original_index);
+            }
+            keep
         });
     }
-    prune_items(
-        pair.egress.protocol,
-        &mut request.items,
-        capabilities.function_calling,
-        false,
-        pair.ingress == pair.egress,
-    );
+    if let Some(removed) = removed {
+        let original_count = request.items.len() + removed.len();
+        let mut first_removed = removed.iter().copied().peekable();
+        let survivors: Vec<usize> = (0..original_count)
+            .filter(|index| {
+                if first_removed.peek() == Some(index) {
+                    first_removed.next();
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+        prune_items_with_removals(
+            pair.egress.protocol,
+            &mut request.items,
+            capabilities.function_calling,
+            false,
+            pair.ingress == pair.egress,
+            |index| removed.push(survivors[index]),
+        );
+        removed.sort_unstable();
+    } else {
+        prune_items(
+            pair.egress.protocol,
+            &mut request.items,
+            capabilities.function_calling,
+            false,
+            pair.ingress == pair.egress,
+        );
+    }
 }
 
 /// The readable summary of an Anthropic-origin compaction state, if `item` is one.
@@ -881,6 +932,24 @@ fn prune_items(
     output: bool,
     preserve_blocks: bool,
 ) {
+    prune_items_with_removals(
+        target,
+        items,
+        tools_supported,
+        output,
+        preserve_blocks,
+        |_| {},
+    );
+}
+
+fn prune_items_with_removals(
+    target: Protocol,
+    items: &mut Vec<stravia_runtime_contract::protocol::ir::AiItem>,
+    tools_supported: bool,
+    output: bool,
+    preserve_blocks: bool,
+    mut removed: impl FnMut(usize),
+) {
     let mut dropped_calls = std::collections::HashSet::new();
     for item in items.iter_mut() {
         prune_item(
@@ -892,7 +961,16 @@ fn prune_items(
             &mut dropped_calls,
         );
     }
-    items.retain_mut(|item| retain_pruned_item(target, item, tools_supported, &dropped_calls));
+    let mut index = 0;
+    items.retain_mut(|item| {
+        let original_index = index;
+        index += 1;
+        let keep = retain_pruned_item(target, item, tools_supported, &dropped_calls);
+        if !keep {
+            removed(original_index);
+        }
+        keep
+    });
 }
 
 fn prune_item(
@@ -1098,6 +1176,9 @@ fn item_block_representable(
         _ => {
             request_block_representable(target, block)
                 || output
+                    && target == Protocol::AnthropicMessages
+                    && matches!(block, ContentBlock::Compaction { .. })
+                || output
                     && matches!(
                         target,
                         Protocol::OpenResponses
@@ -1185,8 +1266,13 @@ fn request_block_representable(
     target: Protocol,
     block: &stravia_runtime_contract::protocol::ir::ContentBlock,
 ) -> bool {
+    use crate::attachment::{
+        AttachmentKind, attachment_block_supported, inline_media_type_supported,
+    };
     use stravia_runtime_contract::protocol::ir::{ContentBlock, MediaSource};
 
+    // 媒体块的种类级能力来自 `attachment` 的交付能力表；来源变体与 Bedrock/Anthropic
+    // 的角色、MIME 限制仍按各 encoder 的实际载体在下面逐项判断。
     // 思考块由 thinking replay 按来源剥离受保护载荷，再由出口 codec 决定原生承载或
     // 降级为正文；无法承载的受保护载荷按契约忽略，不属于意外丢失。
     if matches!(block, ContentBlock::RedactedThinking { .. }) {
@@ -1209,10 +1295,9 @@ fn request_block_representable(
             } => true,
             ContentBlock::Image { source, .. } => match source {
                 MediaSource::Url(_) | MediaSource::FileId { .. } => true,
-                MediaSource::Base64 { media_type, .. } => matches!(
-                    media_type.as_str(),
-                    "image/jpeg" | "image/png" | "image/gif" | "image/webp"
-                ),
+                MediaSource::Base64 { media_type, .. } => {
+                    inline_media_type_supported(target, AttachmentKind::Image, media_type)
+                }
             },
             ContentBlock::File { source, media_type } => match source {
                 MediaSource::FileId { .. } => true,
@@ -1223,50 +1308,43 @@ fn request_block_representable(
                     media_type: source_type,
                     ..
                 } => {
-                    matches!(source_type.as_str(), "application/pdf" | "text/plain")
+                    inline_media_type_supported(target, AttachmentKind::File, source_type)
                         && media_type.as_ref().is_none_or(|mime| mime == source_type)
                 }
             },
             _ => false,
         },
-        Protocol::GoogleGemini => matches!(
-            block,
-            ContentBlock::Text { .. }
-                | ContentBlock::Image { .. }
-                | ContentBlock::Audio { .. }
-                | ContentBlock::Document { .. }
-                | ContentBlock::File { .. }
-                | ContentBlock::Video { .. }
-                | ContentBlock::ToolUse { .. }
-                | ContentBlock::ToolResult { .. }
-                | ContentBlock::ExecutableCode { .. }
-                | ContentBlock::CodeExecutionResult { .. }
-        ),
-        Protocol::OpenAICompatible => matches!(
-            block,
-            ContentBlock::Text { .. }
-                | ContentBlock::Image { .. }
-                | ContentBlock::Audio { .. }
-                | ContentBlock::File { .. }
-                | ContentBlock::Document { .. }
-                | ContentBlock::ToolUse { .. }
-                | ContentBlock::ToolResult { .. }
-        ),
-        Protocol::OpenResponses => matches!(
-            block,
-            ContentBlock::Text { .. }
-                | ContentBlock::Image { .. }
-                | ContentBlock::File { .. }
-                | ContentBlock::Document { .. }
-                | ContentBlock::Video {
-                    source: stravia_runtime_contract::protocol::ir::MediaSource::Url { .. }
-                        | stravia_runtime_contract::protocol::ir::MediaSource::Base64 { .. },
-                    ..
-                }
-                | ContentBlock::Refusal { .. }
-                | ContentBlock::ToolUse { .. }
-                | ContentBlock::ToolResult { .. }
-        ),
+        Protocol::GoogleGemini => {
+            matches!(
+                block,
+                ContentBlock::Text { .. }
+                    | ContentBlock::ToolUse { .. }
+                    | ContentBlock::ToolResult { .. }
+                    | ContentBlock::ExecutableCode { .. }
+                    | ContentBlock::CodeExecutionResult { .. }
+            ) || attachment_block_supported(target, block)
+        }
+        Protocol::OpenAICompatible => {
+            matches!(
+                block,
+                ContentBlock::Text { .. }
+                    | ContentBlock::ToolUse { .. }
+                    | ContentBlock::ToolResult { .. }
+            ) || attachment_block_supported(target, block)
+        }
+        Protocol::OpenResponses => {
+            matches!(
+                block,
+                ContentBlock::Text { .. }
+                    | ContentBlock::Refusal { .. }
+                    | ContentBlock::ToolUse { .. }
+                    | ContentBlock::ToolResult { .. }
+            ) || match block {
+                // file id 没有 input_video 载体，视频只能是 URL 或内联。
+                ContentBlock::Video { source, .. } => !matches!(source, MediaSource::FileId { .. }),
+                _ => attachment_block_supported(target, block),
+            }
+        }
         Protocol::BedrockConverse => {
             matches!(
                 block,
@@ -1289,35 +1367,19 @@ fn request_block_representable(
                 || matches!(block, ContentBlock::File {
             source: stravia_runtime_contract::protocol::ir::MediaSource::Base64 { media_type: source_type, data },
             media_type,
-        } if !data.is_empty() && matches!(media_type.as_deref().unwrap_or(source_type),
-            "application/pdf" | "text/csv" | "application/csv" | "application/msword"
-            | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            | "application/vnd.ms-excel" | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            | "text/html" | "text/plain" | "text/markdown" | "text/x-markdown"))
+        } if !data.is_empty() && inline_media_type_supported(
+            target,
+            AttachmentKind::File,
+            media_type.as_deref().unwrap_or(source_type)))
         }
-        Protocol::CohereChat => matches!(
-            block,
-            ContentBlock::Text { .. }
-                | ContentBlock::Image { .. }
-                | ContentBlock::ToolUse { .. }
-                | ContentBlock::ToolResult { .. }
-        ),
-        Protocol::WatsonxTextChat => matches!(
-            block,
-            ContentBlock::Text { .. }
-                | ContentBlock::Image { .. }
-                | ContentBlock::ToolUse { .. }
-                | ContentBlock::ToolResult { .. }
-        ),
-        Protocol::GatewayLanguageModel => matches!(
-            block,
-            ContentBlock::Text { .. }
-                | ContentBlock::Image { .. }
-                | ContentBlock::File { .. }
-                | ContentBlock::Video { .. }
-                | ContentBlock::ToolUse { .. }
-                | ContentBlock::ToolResult { .. }
-        ),
+        Protocol::CohereChat | Protocol::WatsonxTextChat | Protocol::GatewayLanguageModel => {
+            matches!(
+                block,
+                ContentBlock::Text { .. }
+                    | ContentBlock::ToolUse { .. }
+                    | ContentBlock::ToolResult { .. }
+            ) || attachment_block_supported(target, block)
+        }
     }
 }
 
@@ -1432,6 +1494,8 @@ fn response_item_representable(
 ) -> bool {
     if target == Protocol::OpenResponses {
         open_responses_output_item_representable(item)
+    } else if target == Protocol::AnthropicMessages && item.is_compaction() {
+        true
     } else {
         !item.is_compaction() && !item.is_compaction_trigger() && item.unknown_ref().is_none()
     }

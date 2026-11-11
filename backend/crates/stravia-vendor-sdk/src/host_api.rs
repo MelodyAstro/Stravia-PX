@@ -4,8 +4,7 @@ use crate::bindings::stravia::vendor::{host, types};
 use crate::envelope::{encode_payload, error};
 use crate::guest::{ErrorKind, PluginError};
 
-pub use host::{HttpResponse, WsConnection};
-pub use types::WsMessage;
+use crate::net::HttpResponse;
 
 /// Operation-scoped access to controlled host services. It is intentionally
 /// not cloneable into a background executor; imported resources are owned and
@@ -20,43 +19,22 @@ impl GuestHost {
         Self { _private: () }
     }
 
-    /// Admit an HTTP request and immediately return its pending response
-    /// resource. Waiting happens only in `status`, `headers`, and `read_body`.
-    /// Manual compression headers and pre-encoded request bytes retain their
-    /// legacy behavior; use `http_start_with_compression` for host-owned coding.
-    pub fn http_start(&self, request: types::HttpRequest) -> Result<HttpResponse, PluginError> {
-        host::http_start(&request)
-    }
-
-    /// Admit an HTTP request with host-owned compression. Bodies are application
-    /// bytes; do not provide Accept-Encoding, Content-Encoding, or Content-Length.
-    pub fn http_start_with_compression(
+    /// Start a host-authorized request using a snapshot of the options.
+    pub fn http_start(
         &self,
-        request: types::HttpRequest,
-        compression: types::HttpCompression,
-    ) -> Result<HttpResponse, PluginError> {
-        host::http_start_with_compression(&request, &compression)
+        request: crate::net::Request,
+        options: &crate::net::Options,
+    ) -> Result<crate::net::HttpResponse, PluginError> {
+        crate::net::start(request, options)
     }
 
-    /// Connect with the plugin's cross-request reuse policy. A missing
-    /// `reuse_max_age_millis` uses the host default; zero prevents cross-request
-    /// reuse. The host may cap the requested age, measured from the first
-    /// handshake, and later requests cannot extend it. In-flight I/O keeps its
-    /// independent host deadline.
-    /// This legacy entry point does not negotiate compression.
-    pub fn ws_connect(&self, request: types::WsRequest) -> Result<WsConnection, PluginError> {
-        host::ws_connect(&request)
-    }
-
-    /// Connect with an explicit handshake compression policy. Required
-    /// compression fails before application messages if unavailable.
-    /// Do not provide Sec-WebSocket-Extensions manually.
-    pub fn ws_connect_with_compression(
+    /// Connect a host-authorized WebSocket using a snapshot of the options.
+    pub fn ws_connect(
         &self,
-        request: types::WsRequest,
-        compression: types::WsCompression,
-    ) -> Result<WsConnection, PluginError> {
-        host::ws_connect_with_compression(&request, compression)
+        request: crate::net::ConnectRequest,
+        options: &crate::net::Options,
+    ) -> Result<crate::net::WebSocket, PluginError> {
+        crate::net::connect(request, options)
     }
 
     pub fn read_private_state(&self) -> Result<Option<Vec<u8>>, PluginError> {

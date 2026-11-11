@@ -8,10 +8,10 @@ use serde_json::Value;
 use stravia_vendor_sdk::{
     AiErrorKind, AiRequest, AiResponse, AiStreamDelta, CANONICAL_FORMAT_VERSION, Capability,
     ChannelDescriptor, ConfigField, ConfigFieldKind, ConfigGroup, ConfigValidationResponse,
-    DataCompatibility, EnumOption, ErrorKind, GuestHost, HttpRequest, LocalizedText,
-    NetworkDeclaration, Operation, OperationInput, OperationOutput, PluginError,
-    ProviderDescriptor, ProviderSnapshot, ValidationIssue, VendorDescriptor, VendorGuest,
-    VendorKind, read_http_body,
+    DataCompatibility, EnumOption, ErrorKind, Fields, GuestHost, LocalizedText, NetworkDeclaration,
+    Operation, OperationInput, OperationOutput, Options, PluginError, ProviderDescriptor,
+    ProviderSnapshot, Request, ValidationIssue, VendorDescriptor, VendorGuest, VendorKind,
+    read_http_body,
 };
 
 struct LifecycleContractVendor;
@@ -54,6 +54,7 @@ impl VendorGuest for LifecycleContractVendor {
                 "fallback" => VendorKind::Fallback,
                 value => panic!("unknown fixture Vendor kind: {value}"),
             },
+            egress_shapes: Vec::new(),
             providers: vec![ProviderDescriptor {
                 provider_id: build_value("STRAVIA_FIXTURE_PROVIDER_ID", "fixture.lifecycle").into(),
                 catalog_id: None,
@@ -222,12 +223,15 @@ impl VendorGuest for LifecycleContractVendor {
     ) -> Result<String, PluginError> {
         match provider.options.get("mode").and_then(Value::as_str) {
             Some("selection-http") => {
-                stravia_vendor_sdk::wit::host::http_start(&HttpRequest {
-                    method: "GET".into(),
-                    url: format!("{}/selection", provider.base_url.trim_end_matches('/')),
-                    headers: Vec::new(),
-                    body: Vec::new(),
-                })?;
+                let mut options = Options::new();
+                options.shape("default").map_err(invalid)?;
+                GuestHost::new().http_start(
+                    Request::new(
+                        "GET",
+                        format!("{}/selection", provider.base_url.trim_end_matches('/')),
+                    ),
+                    &options,
+                )?;
             }
             Some("selection-state") => stravia_vendor_sdk::wit::host::write_private_state(b"999")?,
             Some("selection-event") => stravia_vendor_sdk::wit::host::emit_started()?,
@@ -302,26 +306,37 @@ impl VendorGuest for LifecycleContractVendor {
             }
             "oversized-output" => exceed_output_budget()?,
             "websocket" => {
-                host.ws_connect(stravia_vendor_sdk::WsRequest {
-                    url: configured_url(&provider.options, "targetUrl")?.into(),
-                    headers: Vec::new(),
-                    protocols: Vec::new(),
-                    continuation_id: None,
-                    reuse_max_age_millis: None,
-                })?;
+                let mut options = Options::new();
+                options.shape("default").map_err(invalid)?;
+                host.ws_connect(
+                    stravia_vendor_sdk::ConnectRequest::new(configured_url(
+                        &provider.options,
+                        "targetUrl",
+                    )?),
+                    &options,
+                )?;
             }
             "websocket-compression" => {
-                let socket = host.ws_connect_with_compression(
-                    stravia_vendor_sdk::WsRequest {
-                        url: configured_url(&provider.options, "auxUrl")?.into(),
-                        headers: Vec::new(),
-                        protocols: Vec::new(),
-                        continuation_id: None,
-                        reuse_max_age_millis: Some(0),
-                    },
-                    stravia_vendor_sdk::WsCompression::PermessageDeflate(
-                        stravia_vendor_sdk::CompressionNegotiation::Required,
-                    ),
+                let mut options = Options::new();
+                options.shape("default").map_err(invalid)?;
+                options
+                    .reuse_max_age(std::time::Duration::ZERO)
+                    .map_err(invalid)?;
+                options
+                    .ws_compression(stravia_vendor_sdk::WsCompression::Required)
+                    .map_err(invalid)?;
+                let mut fields = Fields::new();
+                fields.append(
+                    "sec-websocket-extensions",
+                    b"permessage-deflate; client_max_window_bits".to_vec(),
+                );
+                let socket = host.ws_connect(
+                    stravia_vendor_sdk::ConnectRequest::new(configured_url(
+                        &provider.options,
+                        "auxUrl",
+                    )?)
+                    .fields(fields),
+                    &options,
                 )?;
                 socket.send(&stravia_vendor_sdk::WsMessage::Text(
                     serde_json::to_string(&request).map_err(invalid)?,
@@ -381,7 +396,9 @@ impl VendorGuest for LifecycleContractVendor {
                 serde_json::to_vec(&request).map_err(invalid)?,
             )
         };
-        let mut headers = vec![
+        let mut headers: Vec<(String, String)> = vec![
+            ("accept".into(), "application/json".into()),
+            ("user-agent".into(), "stravia-lifecycle-fixture".into()),
             ("content-type".into(), "application/json".into()),
             (
                 "x-fixture-version".into(),
@@ -398,33 +415,44 @@ impl VendorGuest for LifecycleContractVendor {
             headers.push(("x-plugin-state".into(), diagnostic_state.into()));
         }
 
-        let http_request = HttpRequest {
-            method: method.into(),
-            url,
-            headers,
-            body,
-        };
-        let response = if mode == "compression" {
-            host.http_start_with_compression(
-                http_request,
-                stravia_vendor_sdk::HttpCompression {
-                    request: Some(stravia_vendor_sdk::HttpContentCoding::Gzip),
-                    response: vec![stravia_vendor_sdk::HttpContentCoding::Gzip],
-                },
-            )?
+        let mut fields = Fields::new();
+        for (name, value) in headers {
+            fields.append(name, String::into_bytes(value));
+        }
+        let mut options = Options::new();
+        options.shape("default").map_err(invalid)?;
+        if mode == "compression" {
+            fields.append("accept-encoding", b"gzip".to_vec());
+            fields.append("content-encoding", b"gzip".to_vec());
+            options
+                .request_encoding(stravia_vendor_sdk::Coding::Gzip)
+                .map_err(invalid)?;
+            options
+                .response_decoding(&[stravia_vendor_sdk::Coding::Gzip])
+                .map_err(invalid)?;
         } else {
-            host.http_start(http_request)?
-        };
+            fields.append("accept-encoding", b"identity".to_vec());
+        }
+        let response = host.http_start(
+            Request {
+                method: method.into(),
+                url,
+                headers: fields,
+                body,
+            },
+            &options,
+        )?;
         let auxiliary = if mode == "parallel" {
-            Some(host.http_start(HttpRequest {
-                method: "GET".into(),
-                url: format!(
-                    "{}/aux",
-                    configured_url(&provider.options, "auxUrl")?.trim_end_matches('/')
+            Some(host.http_start(
+                Request::new(
+                    "GET",
+                    format!(
+                        "{}/aux",
+                        configured_url(&provider.options, "auxUrl")?.trim_end_matches('/')
+                    ),
                 ),
-                headers: Vec::new(),
-                body: Vec::new(),
-            })?)
+                &options,
+            )?)
         } else {
             None
         };
@@ -454,7 +482,7 @@ impl VendorGuest for LifecycleContractVendor {
                 upstream_status: Some(status),
             };
             host.emit_failed(PluginError {
-                kind: failure.kind,
+                kind: failure.kind.clone(),
                 message: failure.message.clone(),
                 upstream_status: failure.upstream_status,
             })?;

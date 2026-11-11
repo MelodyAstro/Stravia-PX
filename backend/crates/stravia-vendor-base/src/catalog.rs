@@ -10,9 +10,10 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 use stravia_vendor_common::common;
+use stravia_vendor_sdk::net::{Fields, HttpResponse, Request};
 use stravia_vendor_sdk::{
-    CatalogSyncOutcome, CatalogSyncRequest, ErrorKind, GuestHost, HttpRequest, PluginError,
-    ProviderDescriptor, read_http_body,
+    CatalogSyncOutcome, CatalogSyncRequest, ErrorKind, GuestHost, PluginError, ProviderDescriptor,
+    read_http_body,
 };
 
 const MAX_VERSION_BODY: usize = 64 * 1024;
@@ -275,22 +276,21 @@ fn fetch_document(
         .map_err(|_| common::plugin_error(ErrorKind::Invalid, format!("{path} is not valid UTF-8")))
 }
 
-fn request(
-    host: &GuestHost,
-    base_url: &str,
-    path: &str,
-) -> Result<stravia_vendor_sdk::HttpResponse, PluginError> {
-    host.http_start(HttpRequest {
-        method: "GET".to_owned(),
-        url: format!("{base_url}/{path}"),
-        headers: vec![("accept".to_owned(), "application/json".to_owned())],
-        body: Vec::new(),
-    })
+fn request(host: &GuestHost, base_url: &str, path: &str) -> Result<HttpResponse, PluginError> {
+    host.http_start(
+        Request {
+            method: "GET".to_owned(),
+            url: format!("{base_url}/{path}"),
+            headers: crate::fields(vec![("accept".to_owned(), "application/json".to_owned())]),
+            body: Vec::new(),
+        },
+        &crate::net_options(),
+    )
 }
 
 fn ensure_success(
     status: u16,
-    headers: &[(String, String)],
+    headers: &Fields,
     body: &[u8],
     document: &str,
 ) -> Result<(), PluginError> {

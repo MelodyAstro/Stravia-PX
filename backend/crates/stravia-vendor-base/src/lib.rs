@@ -26,6 +26,57 @@ use stravia_vendor_sdk::{
     VendorDescriptor, VendorKind,
 };
 
+fn fields(headers: Vec<(String, String)>) -> stravia_vendor_sdk::net::Fields {
+    let mut fields = stravia_vendor_sdk::net::Fields::new();
+    for (name, value) in headers {
+        fields.append(name, value.into_bytes());
+    }
+    fields
+}
+
+fn add_anthropic_compaction_beta(headers: &mut stravia_vendor_sdk::net::Fields) {
+    use stravia_protocol_codec::codec::compaction::ANTHROPIC_COMPACTION_BETA;
+
+    let Some(value) = headers.get("anthropic-beta") else {
+        headers.append("anthropic-beta", ANTHROPIC_COMPACTION_BETA);
+        return;
+    };
+    fn trim(bytes: &[u8]) -> &[u8] {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            text.trim().as_bytes()
+        } else {
+            bytes.trim_ascii()
+        }
+    }
+    if value
+        .split(|byte| *byte == b',')
+        .any(|beta| trim(beta) == ANTHROPIC_COMPACTION_BETA.as_bytes())
+    {
+        return;
+    }
+    let has_value = !trim(value).is_empty();
+    let fields = std::mem::take(headers).into_vec();
+    let mut updated = false;
+    for mut field in fields {
+        if !updated && field.name.eq_ignore_ascii_case("anthropic-beta") {
+            if has_value {
+                field.bytes.push(b',');
+            }
+            field
+                .bytes
+                .extend_from_slice(ANTHROPIC_COMPACTION_BETA.as_bytes());
+            updated = true;
+        }
+        headers.append(field.name, field.bytes);
+    }
+}
+
+fn net_options() -> stravia_vendor_sdk::net::Options {
+    let mut options = stravia_vendor_sdk::net::Options::new();
+    options.shape("default").expect("default shape is valid");
+    options
+}
+
 /// Profiles statically owned by this vendor — not catalog entries. `custom`
 /// is the merged profile covering every selectable egress protocol.
 pub(crate) const INTERNAL_PROVIDER_IDS: &[&str] =
@@ -122,6 +173,7 @@ pub fn descriptor() -> VendorDescriptor {
     );
 
     VendorDescriptor {
+        egress_shapes: Vec::new(),
         vendor_id: "base".into(),
         version: semver::Version::parse(env!("CARGO_PKG_VERSION"))
             .expect("package version must be valid semver"),
@@ -283,7 +335,7 @@ pub(crate) fn encode_inference_request(
 pub(crate) fn decode_inference(
     host: &GuestHost,
     protocol: &str,
-    response: stravia_vendor_sdk::HttpResponse,
+    response: stravia_vendor_sdk::net::HttpResponse,
 ) -> Result<OperationOutput, PluginError> {
     let Some(adapter) = codec::adapter(protocol) else {
         // 协议级错误识别只认受保护推理拒绝（签名/密文被上游拒收），
@@ -307,7 +359,7 @@ pub(crate) fn decode_inference(
 pub(crate) fn decode_inference_with_adapter(
     host: &GuestHost,
     adapter: &dyn stravia_protocol_codec::transform::ProtocolAdapter,
-    response: stravia_vendor_sdk::HttpResponse,
+    response: stravia_vendor_sdk::net::HttpResponse,
 ) -> Result<OperationOutput, PluginError> {
     let classify = generic::inference_error_classifier_for(adapter.id().protocol);
     let status = response.status()?;
@@ -322,11 +374,11 @@ pub(crate) fn decode_inference_with_adapter(
         }
         return Err(common::upstream_error(status, &headers, &body));
     }
-    let streaming = headers.iter().any(|(name, value)| {
-        if !name.eq_ignore_ascii_case("content-type") {
+    let streaming = headers.iter().any(|field| {
+        if !field.name.eq_ignore_ascii_case("content-type") {
             return false;
         }
-        let value = value.to_ascii_lowercase();
+        let value = String::from_utf8_lossy(&field.bytes).to_ascii_lowercase();
         value.contains("text/event-stream")
             || value.contains("application/x-ndjson")
             || value.contains("application/connect+proto")

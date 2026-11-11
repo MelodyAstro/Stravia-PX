@@ -12,7 +12,6 @@ mod provider_model_sync;
 mod runtime;
 #[cfg(test)]
 mod vendor_auxiliary_tests;
-mod vendor_transport;
 
 pub use builder::GatewayBuilder;
 use extensions::configure_gateway_extensions;
@@ -64,10 +63,12 @@ pub struct Gateway {
     pub config: GatewayConfig,
     pub storage: DynStorage,
     pub storage_kind: RuntimeStorageKind,
+    pub(crate) client_installation_id: Arc<str>,
     pub(crate) runtime_cache: crate::runtime_cache::RuntimeCache,
     pub(crate) http_client: reqwest::Client,
-    vendor_http_client: reqwest::Client,
-    vendor_websocket_client: reqwest::Client,
+    pub(crate) vendor_transport: Arc<crate::plugin::network::transport::VendorTransport>,
+    pub(crate) vendor_shapes: Arc<crate::plugin::network::shape::ShapeRegistry>,
+    pub(crate) vendor_resolver: Arc<dyn crate::plugin::network::transport::Resolver>,
     pub(crate) vendor_plugins: Arc<crate::plugin::manager::VendorPlugins>,
     pub(crate) platform_plugins: Arc<crate::platform_plugins::PlatformPlugins>,
     pub(crate) vendor_websocket_pool: Arc<crate::plugin::network::VendorWebSocketPool>,
@@ -75,7 +76,6 @@ pub struct Gateway {
     pub catalog_sync: crate::plugin::catalog_sync::VendorCatalogSync,
     pub(crate) provider_allowance_state: admin::provider_allowance::ProviderAllowanceState,
     pub(crate) allowance_samples: admin::provider_allowance::AllowanceSampleStore,
-    vendor_client_cache: Arc<tokio::sync::RwLock<[Option<VendorClientCache>; 2]>>,
     pub(crate) principal_admission: Arc<admission::PrincipalAdmission>,
     pub(crate) rpm_admission: crate::rpm::TargetAdmission,
     pub model_cache: Arc<tokio::sync::RwLock<router::RouteCache>>,
@@ -132,10 +132,12 @@ impl Gateway {
             config: self.config.clone(),
             storage: Arc::clone(&self.storage),
             storage_kind: self.storage_kind,
+            client_installation_id: Arc::clone(&self.client_installation_id),
             runtime_cache: self.runtime_cache.clone(),
             http_client: self.http_client.clone(),
-            vendor_http_client: self.vendor_http_client.clone(),
-            vendor_websocket_client: self.vendor_websocket_client.clone(),
+            vendor_transport: Arc::clone(&self.vendor_transport),
+            vendor_shapes: Arc::clone(&self.vendor_shapes),
+            vendor_resolver: Arc::clone(&self.vendor_resolver),
             vendor_plugins: Arc::clone(&self.vendor_plugins),
             platform_plugins: Arc::clone(&self.platform_plugins),
             vendor_websocket_pool: Arc::clone(&self.vendor_websocket_pool),
@@ -143,7 +145,6 @@ impl Gateway {
             catalog_sync: self.catalog_sync.clone(),
             provider_allowance_state: self.provider_allowance_state.clone(),
             allowance_samples: self.allowance_samples.clone(),
-            vendor_client_cache: Arc::clone(&self.vendor_client_cache),
             principal_admission: Arc::clone(&self.principal_admission),
             rpm_admission: self.rpm_admission.clone(),
             model_cache: Arc::clone(&self.model_cache),
@@ -218,16 +219,4 @@ impl Drop for Gateway {
             self.observation.stop_background();
         }
     }
-}
-
-pub(crate) struct VendorClientSnapshot {
-    pub(crate) http: reqwest::Client,
-    pub(crate) websocket: reqwest::Client,
-    pub(crate) websocket_reuse_identity: String,
-}
-
-#[derive(Clone)]
-struct VendorClientCache {
-    cache_key: String,
-    client: reqwest::Client,
 }

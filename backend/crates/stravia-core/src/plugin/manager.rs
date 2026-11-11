@@ -17,6 +17,7 @@ use crate::db::models::Provider;
 use super::artifacts::{MAX_COMPONENT_BYTES, PluginArtifacts};
 use super::builtin::{BundledPlugins, CompileCache, record_admission};
 use super::lifecycle::{VendorOperation, VendorOperationTracker, WritePermit};
+use super::network::shape::ShapeRegistry;
 use super::permissions::resolve_permissions;
 use super::store::{
     DataReset, InstalledPlugin, PluginStore, ProviderReset, has_plugin_model_metadata,
@@ -26,9 +27,24 @@ use super::types::*;
 const MAX_PREVIEWS: usize = 8;
 const PREVIEW_LIFETIME: Duration = Duration::from_secs(15 * 60);
 
+/// 组件与出站形态作为一个准入快照发布，更新不能混用两个代际。
+#[derive(Clone)]
+pub(crate) struct AdmittedPlugin {
+    pub(crate) component: LoadedPlugin,
+    pub(crate) shapes: Arc<ShapeRegistry>,
+}
+
+impl AdmittedPlugin {
+    fn new(component: LoadedPlugin, builtins: &Arc<ShapeRegistry>) -> anyhow::Result<Self> {
+        let shapes =
+            builtins.with_plugin(component.identity(), &component.descriptor().egress_shapes)?;
+        Ok(Self { component, shapes })
+    }
+}
+
 struct Entry {
     record: InstalledPlugin,
-    loaded: Option<LoadedPlugin>,
+    loaded: Option<AdmittedPlugin>,
     /// Catalog profiles the advertised set dropped. They stay inside the
     /// effective descriptor so saved connections keep executing, but are
     /// hidden from every creation/listing surface.
@@ -58,7 +74,7 @@ struct RecordedDataField {
 struct Pending {
     preview: PluginPreview,
     record: InstalledPlugin,
-    loaded: LoadedPlugin,
+    loaded: AdmittedPlugin,
     expected_revision: Option<i64>,
     provider_fingerprint: Vec<u8>,
     data_fingerprint: Vec<u8>,
@@ -75,6 +91,7 @@ struct ProviderState {
     oauth: Option<crate::db::models::OAuthCredential>,
     models: Vec<crate::provider_models::ProviderModelRecord>,
     private_state: Option<(String, Vec<u8>)>,
+    atomic_state: bool,
 }
 
 pub(crate) struct VendorPlugins {
@@ -83,6 +100,7 @@ pub(crate) struct VendorPlugins {
     operations: VendorOperationTracker,
     entries: RwLock<HashMap<String, Entry>>,
     bundled: Arc<BundledPlugins>,
+    shapes: Arc<ShapeRegistry>,
     artifacts: Option<PluginArtifacts>,
     pending: Mutex<HashMap<String, Pending>>,
     updates: Mutex<()>,
@@ -93,6 +111,7 @@ impl VendorPlugins {
         store: PluginStore,
         plugin_directory: PathBuf,
         compile_cache: Option<CompileCache>,
+        shapes: Arc<ShapeRegistry>,
     ) -> anyhow::Result<Arc<Self>> {
         // 内置组件跨实例共享；内存存储共享无缓存运行时，持久存储的本地插件
         // 则各自使用 data_dir 下的文件映射编译缓存，不写入其他实例的目录。
@@ -153,12 +172,18 @@ impl VendorPlugins {
                     if package.descriptor().vendor_id == record.vendor_id
                         && package.descriptor().version.to_string() == record.version =>
                 {
-                    Some(package)
+                    match AdmittedPlugin::new(package, &shapes) {
+                        Ok(admitted) => Some(admitted),
+                        Err(error) => {
+                            tracing::warn!(vendor_id = %record.vendor_id, %error, "installed plugin egress shapes are invalid");
+                            None
+                        }
+                    }
                 }
                 _ => None,
             };
             if let Some(package) = &loaded {
-                record.descriptor = serde_json::to_string(package.descriptor())?;
+                record.descriptor = serde_json::to_string(package.component.descriptor())?;
             }
             record.component = Bytes::new();
             entries.insert(
@@ -176,6 +201,7 @@ impl VendorPlugins {
             operations: VendorOperationTracker::default(),
             entries: RwLock::new(entries),
             bundled,
+            shapes,
             artifacts,
             pending: Mutex::new(HashMap::new()),
             updates: Mutex::new(()),
@@ -203,7 +229,7 @@ impl VendorPlugins {
     pub(crate) fn acquire(
         &self,
         vendor_id: &str,
-    ) -> anyhow::Result<(LoadedPlugin, Arc<VendorOperation>, i64)> {
+    ) -> anyhow::Result<(AdmittedPlugin, Arc<VendorOperation>, i64)> {
         // 准入先于版本读取；不兼容更新在 drain 完成前不能换入新版本。
         let operation = self.operations.begin(vendor_id)?;
         let entries = self.entries.read();
@@ -214,7 +240,7 @@ impl VendorPlugins {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("vendor plugin is unavailable"))?;
         anyhow::ensure!(
-            loaded.descriptor().provider(vendor_id).is_some(),
+            loaded.component.descriptor().provider(vendor_id).is_some(),
             "selected vendor plugin does not support this provider"
         );
         operation.ensure_current()?;
@@ -227,7 +253,7 @@ impl VendorPlugins {
     pub(crate) fn acquire_package(
         &self,
         package_id: &str,
-    ) -> anyhow::Result<(LoadedPlugin, Arc<VendorOperation>, i64)> {
+    ) -> anyhow::Result<(AdmittedPlugin, Arc<VendorOperation>, i64)> {
         let operation = self.operations.begin(package_id)?;
         let entries = self.entries.read();
         let entry = entries
@@ -244,7 +270,7 @@ impl VendorPlugins {
     pub(crate) fn descriptor(&self, vendor_id: &str) -> anyhow::Result<ProviderDescriptor> {
         resolved_entry(&self.entries.read(), vendor_id)
             .and_then(|entry| entry.loaded.as_ref())
-            .and_then(|plugin| plugin.descriptor().provider(vendor_id))
+            .and_then(|plugin| plugin.component.descriptor().provider(vendor_id))
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("vendor plugin is unavailable"))
     }
@@ -276,7 +302,7 @@ impl VendorPlugins {
             .iter()
             .map(|profile| profile.provider_id.clone())
             .collect();
-        let mut descriptor = loaded.descriptor().clone();
+        let mut descriptor = loaded.component.descriptor().clone();
         // Every profile the effective set once carried but the fresh set drops
         // is retained as retired; a profile returning to the advertised set is
         // active again because it arrives through `providers`.
@@ -296,7 +322,10 @@ impl VendorPlugins {
         entry.retired_profiles = retired.keys().cloned().collect();
         descriptor.providers = providers;
         descriptor.providers.extend(retired.values().cloned());
-        entry.loaded = Some(loaded.with_descriptor(descriptor.clone()));
+        entry.loaded = Some(AdmittedPlugin {
+            component: loaded.component.with_descriptor(descriptor.clone()),
+            shapes: Arc::clone(&loaded.shapes),
+        });
         entry.record.descriptor = serde_json::to_string(&descriptor)?;
         Ok(retired.into_values().collect())
     }
@@ -324,6 +353,7 @@ impl VendorPlugins {
             };
             descriptors.extend(
                 loaded
+                    .component
                     .descriptor()
                     .providers
                     .iter()
@@ -350,7 +380,7 @@ impl VendorPlugins {
             let Some(loaded) = &entry.loaded else {
                 continue;
             };
-            let descriptor = loaded.descriptor();
+            let descriptor = loaded.component.descriptor();
             let package = ProfilePackage {
                 source: ProviderPluginSource {
                     id: package_id.clone(),
@@ -455,9 +485,14 @@ impl VendorPlugins {
                 .runtime
                 .load(&bytes)
                 .await
-                .map_err(|_| anyhow::anyhow!("invalid or incompatible vendor component"))?,
+                .map_err(|error| match error {
+                    error @ (stravia_vendor_runtime::LoadError::IncompatibleAbi { .. }
+                    | stravia_vendor_runtime::LoadError::RequiresNewerHost { .. }) => error.into(),
+                    _ => anyhow::anyhow!("invalid or incompatible vendor component"),
+                })?,
         };
-        let descriptor = loaded.descriptor();
+        let loaded = AdmittedPlugin::new(loaded, &self.shapes)?;
+        let descriptor = loaded.component.descriptor();
         if let Some(expected) = expected_vendor {
             anyhow::ensure!(
                 descriptor.vendor_id == expected,
@@ -519,16 +554,15 @@ impl VendorPlugins {
                     if old.is_none() {
                         epoch = epoch.max(entry.record.data_epoch);
                     }
-                    let manifest =
-                        entry
-                            .loaded
-                            .as_ref()
-                            .map(LoadedPlugin::descriptor)
-                            .or_else(|| {
-                                unavailable
-                                    .get(entry.record.vendor_id.as_str())
-                                    .and_then(Option::as_ref)
-                            });
+                    let manifest = entry
+                        .loaded
+                        .as_ref()
+                        .map(|loaded| loaded.component.descriptor())
+                        .or_else(|| {
+                            unavailable
+                                .get(entry.record.vendor_id.as_str())
+                                .and_then(Option::as_ref)
+                        });
                     if let Some(profile) = manifest.and_then(|manifest| manifest.provider(id)) {
                         profiles.insert(id.clone(), profile.clone());
                     }
@@ -607,7 +641,7 @@ impl VendorPlugins {
                         previous.data_compat.model_metadata_format
                             != next.data_compat.model_metadata_format
                     }),
-                private_state: state.private_state.is_some()
+                private_state: (state.private_state.is_some() || state.atomic_state)
                     && previous.is_none_or(|previous| {
                         previous.data_compat.private_state_format
                             != next.data_compat.private_state_format
@@ -842,7 +876,7 @@ impl VendorPlugins {
                 .store(&pending.record.digest, pending.record.component.clone())
                 .await?;
             // 预览期已完整校验；记录让下次启动不必再实例化它。
-            record_admission(&self.runtime, &pending.loaded).await;
+            record_admission(&self.runtime, &pending.loaded.component).await;
         }
         let quiescent = if pending.data_incompatible {
             let quiescent = futures::future::try_join_all(
@@ -880,12 +914,14 @@ impl VendorPlugins {
         let vendor_id = vendor_id.clone();
         // 本地插件已落盘；预览期编译的产物沿用，空闲后释放并按摘要恢复。
         // 内置版本沿用内嵌来源的句柄。
-        let loaded = match &self.artifacts {
-            Some(artifacts) if pending.preview.target_source == PluginSource::Local => pending
-                .loaded
-                .with_source(artifacts.source(&pending.record.digest)),
-            _ => pending.loaded,
-        };
+        let mut loaded = pending.loaded;
+        if let Some(artifacts) = &self.artifacts
+            && pending.preview.target_source == PluginSource::Local
+        {
+            loaded.component = loaded
+                .component
+                .with_source(artifacts.source(&pending.record.digest));
+        }
         let mut record = pending.record;
         record.component = Bytes::new();
         self.entries.write().insert(
@@ -981,14 +1017,44 @@ impl VendorPlugins {
             let auto_reset = vendor_id.as_str() == "base";
             if auto_reset || preview.discarded_data.is_empty() {
                 let discarded_data = preview.discarded_data;
-                self.confirm(
-                    gw,
-                    ConfirmPluginUpdate {
-                        preview_id: preview.id,
-                        allow_data_discard: auto_reset,
-                    },
-                )
-                .await?;
+                let confirmed = self
+                    .confirm(
+                        gw,
+                        ConfirmPluginUpdate {
+                            preview_id: preview.id,
+                            allow_data_discard: auto_reset,
+                        },
+                    )
+                    .await;
+                if let Err(error) = confirmed {
+                    // 并发启动可能已提交同一内置包；只接纳这一个确定的结果，不重试写入。
+                    // 手动确认、不同来源/摘要/版本及其他存储错误仍保留原有冲突保护。
+                    if matches!(
+                        error.downcast_ref::<super::store::PluginStorageError>(),
+                        Some(super::store::PluginStorageError::Changed)
+                    ) && let Some(mut record) = self.store.get(vendor_id).await?
+                        && record.source == PluginSource::Builtin.as_str()
+                        && record.digest == bundle.digest
+                        && Version::parse(&record.version)
+                            .is_ok_and(|version| version == bundle.loaded.descriptor().version)
+                    {
+                        record.descriptor = serde_json::to_string(bundle.loaded.descriptor())?;
+                        record.component = Bytes::new();
+                        self.entries.write().insert(
+                            vendor_id.clone(),
+                            Entry {
+                                record,
+                                loaded: Some(AdmittedPlugin::new(
+                                    bundle.loaded.clone(),
+                                    &self.shapes,
+                                )?),
+                                retired_profiles: BTreeSet::new(),
+                            },
+                        );
+                        continue;
+                    }
+                    return Err(error);
+                }
                 for discard in discarded_data {
                     tracing::warn!(
                         vendor_id = %vendor_id,
@@ -1330,11 +1396,23 @@ async fn provider_states(
                 &provider.id,
             )
             .await?;
+        let atomic_state = gw
+            .vendor_plugins
+            .store
+            .has_atomic_state(
+                provider
+                    .vendor
+                    .as_deref()
+                    .expect("scoped provider has a vendor"),
+                &provider.id,
+            )
+            .await?;
         states.push(ProviderState {
             provider,
             oauth,
             models,
             private_state,
+            atomic_state,
         });
     }
     Ok(states)
@@ -1357,7 +1435,7 @@ fn provider_fingerprint(states: &[ProviderState], include_data: bool) -> anyhow:
                     .models
                     .iter()
                     .any(|model| has_plugin_model_metadata(&model.metadata)),
-                state.private_state.is_some(),
+                state.private_state.is_some() || state.atomic_state,
             ))?);
         }
     }

@@ -50,6 +50,9 @@ const STATIC_MODELS: &[&str] = &[
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PrivateState {
+    // These are live upstream bindings, not disposable cache entries. No
+    // lifecycle signal proves a scoped affinity dead, so capacity exhaustion
+    // must reject a new write rather than silently reset another session.
     #[serde(default)]
     assignments: BTreeMap<String, ModelAssignmentState>,
     #[serde(default)]
@@ -57,11 +60,12 @@ struct PrivateState {
 }
 
 impl PrivateState {
+    fn record_assignment(&mut self, key: &str, assignment: &ModelAssignmentState) {
+        self.assignments.insert(key.to_owned(), assignment.clone());
+    }
+
     /// First native step is absent; index 1 belongs to CLI title generation.
     fn advance_session(&mut self, mut shape: SessionShape) -> SessionShape {
-        if !self.next_steps.contains_key(&shape.trajectory_id) && self.next_steps.len() >= 256 {
-            self.next_steps.clear();
-        }
         shape.step_index = match self.next_steps.get_mut(&shape.trajectory_id) {
             None => {
                 self.next_steps.insert(shape.trajectory_id.clone(), 2);
@@ -91,6 +95,7 @@ pub(crate) fn descriptor() -> VendorDescriptor {
         Capability::Allowance,
     ]);
     VendorDescriptor {
+        egress_shapes: Vec::new(),
         vendor_id: "devin".into(),
         version: semver::Version::parse(env!("CARGO_PKG_VERSION"))
             .expect("package version must be valid semver"),
@@ -266,13 +271,15 @@ fn infer(
     stravia_protocol_codec::codec::tool_correlation::normalize_request_tool_results(&mut request);
     request.stream.enabled = true;
 
-    let mut state = read_state(host)?;
-    let shape = state.advance_session(session_shape(
-        provider
-            .operation_metadata
-            .get("transport_affinity")
-            .and_then(Value::as_str),
-    ));
+    let affinity = provider
+        .operation_metadata
+        .get("transport_affinity")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty());
+    // Random, request-local identities can never be resumed. Persisting their
+    // counters or cascade assignments only consumes capacity for dead records.
+    let state = affinity.map(|_| read_state(host)).transpose()?;
+    let shape = session_shape(affinity);
 
     let router_known = table
         .as_ref()
@@ -287,14 +294,17 @@ fn infer(
             token,
             (&request.model, &shape.cascade_id),
             platform,
-            &mut state,
+            state.as_ref().map(|(cell, state)| (cell, state)),
             router_known == Some(true),
         )?
     };
     if let Some(assignment) = &assignment {
         request.model = assignment.model_uid.clone();
     }
-    write_state(host, &state)?;
+    let shape = match &state {
+        Some((cell, _)) => advance_session(cell, shape)?,
+        None => shape,
+    };
 
     let proto = encode_prepared_request(
         &request,
@@ -304,6 +314,7 @@ fn infer(
             .as_ref()
             .map(|assignment| assignment.jwt.as_str()),
         platform,
+        &crate::fingerprint(&provider, token)?,
     )
     .map_err(|err| {
         error(
@@ -318,12 +329,15 @@ fn infer(
         )
     })?;
     host.emit_started()?;
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: "POST".into(),
-        url: endpoint(&provider, GET_CHAT_MESSAGE_PATH),
-        headers: connect_headers(token, true),
-        body,
-    })?;
+    let response = host.http_start(
+        stravia_vendor_sdk::net::Request {
+            method: "POST".into(),
+            url: endpoint(&provider, GET_CHAT_MESSAGE_PATH),
+            headers: crate::inference_fields(connect_headers(token, true)),
+            body,
+        },
+        &crate::inference_options(),
+    )?;
     let status = response.status()?;
     if !(200..300).contains(&status) {
         return Err(http_error(
@@ -420,7 +434,7 @@ fn emit_deltas(
             upstream_status: status,
         };
         host.emit_failed(PluginError {
-            kind: failure.kind,
+            kind: failure.kind.clone(),
             message: failure.message.clone(),
             upstream_status: failure.upstream_status,
         })?;
@@ -468,19 +482,28 @@ fn resolve_assignment(
     token: &str,
     (router_uid, cascade_id): (&str, &str),
     platform: DevinClientPlatform,
-    state: &mut PrivateState,
+    state: Option<(&stravia_vendor_sdk::state::Cell, &PrivateState)>,
     required: bool,
 ) -> Result<Option<ModelAssignmentState>, PluginError> {
     let key = format!("{router_uid}|{cascade_id}");
-    if let Some(assignment) = state.assignments.get(&key) {
+    if let Some(assignment) = state.and_then(|(_, state)| state.assignments.get(&key)) {
         return Ok(Some(assignment.clone()));
     }
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: "POST".into(),
-        url: endpoint(provider, ASSIGN_MODEL_PATH),
-        headers: connect_headers(token, false),
-        body: encode_assign_model_request_with_platform(token, router_uid, cascade_id, platform),
-    });
+    let response = host.http_start(
+        stravia_vendor_sdk::net::Request {
+            method: "POST".into(),
+            url: endpoint(provider, ASSIGN_MODEL_PATH),
+            headers: crate::net_fields(connect_headers(token, false)),
+            body: encode_assign_model_request_with_platform(
+                token,
+                router_uid,
+                cascade_id,
+                platform,
+                &crate::fingerprint(provider, token)?,
+            ),
+        },
+        &crate::net_options(),
+    );
     let response = match response {
         Ok(response) => response,
         Err(_) if !required => return Ok(None),
@@ -514,11 +537,10 @@ fn resolve_assignment(
             format!("Devin AssignModel({router_uid}) returned an empty assignment"),
         ));
     }
-    if let Some(assignment) = &assignment {
-        if state.assignments.len() >= 64 {
-            state.assignments.clear();
-        }
-        state.assignments.insert(key, assignment.clone());
+    if let (Some(assignment), Some((cell, _))) = (&assignment, state) {
+        update_state(cell, |state| {
+            state.record_assignment(&key, assignment);
+        })?;
     }
     Ok(assignment)
 }
@@ -529,12 +551,20 @@ fn discover(
 ) -> Result<DiscoverResponse, PluginError> {
     let token = session_token(provider)?;
     let platform = client_platform(provider)?;
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: "POST".into(),
-        url: endpoint(provider, CATALOG_PATH),
-        headers: catalog_headers(token),
-        body: encode_client_metadata_request_with_platform(token, true, platform),
-    })?;
+    let response = host.http_start(
+        stravia_vendor_sdk::net::Request {
+            method: "POST".into(),
+            url: endpoint(provider, CATALOG_PATH),
+            headers: crate::net_fields(catalog_headers(token)),
+            body: encode_client_metadata_request_with_platform(
+                token,
+                true,
+                platform,
+                &crate::fingerprint(provider, token)?,
+            ),
+        },
+        &crate::net_options(),
+    )?;
     let status = response.status()?;
     if !(200..300).contains(&status) {
         return Err(http_error(
@@ -610,6 +640,17 @@ fn session_token(provider: &ProviderSnapshot) -> Result<&str, PluginError> {
 fn connect_headers(token: &str, streaming: bool) -> Vec<(String, String)> {
     let trace = uuid::Uuid::new_v4().simple().to_string();
     let span = uuid::Uuid::new_v4().simple().to_string();
+    if streaming {
+        return vec![
+            ("authorization".into(), format!("Basic {token}-{token}")),
+            ("sentry-trace".into(), format!("{trace}-{}-1", &span[..16])),
+            ("content-type".into(), "application/connect+proto".into()),
+            ("connect-protocol-version".into(), "1".into()),
+            ("accept".into(), "*/*".into()),
+            ("host".into(), String::new()),
+            ("content-length".into(), String::new()),
+        ];
+    }
     vec![
         (
             "content-type".into(),
@@ -645,22 +686,111 @@ fn endpoint(provider: &ProviderSnapshot, path: &str) -> String {
     format!("{}{path}", base.trim_end_matches('/'))
 }
 
-fn read_state(host: &GuestHost) -> Result<PrivateState, PluginError> {
-    match host.read_private_state()? {
+fn decode_state(bytes: Option<&[u8]>) -> Result<PrivateState, PluginError> {
+    match bytes {
         None => Ok(PrivateState::default()),
-        Some(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|_| error(ErrorKind::Invalid, "invalid Devin private state")),
+        Some(bytes) => serde_json::from_slice(bytes)
+            .map_err(|_| error(ErrorKind::Invalid, "invalid Devin business state")),
     }
 }
 
-fn write_state(host: &GuestHost, state: &PrivateState) -> Result<(), PluginError> {
-    let bytes = serde_json::to_vec(state).map_err(|err| {
+fn encode_state(state: &PrivateState) -> Result<Vec<u8>, PluginError> {
+    serde_json::to_vec(state).map_err(|err| {
         error(
             ErrorKind::Trapped,
-            format!("encode Devin private state: {err}"),
+            format!("encode Devin business state: {err}"),
         )
-    })?;
-    host.write_private_state(&bytes)
+    })
+}
+
+trait BusinessCell {
+    fn load(&self)
+    -> Result<stravia_vendor_sdk::state::Snapshot, stravia_vendor_sdk::state::Error>;
+    fn compare_exchange(
+        &self,
+        revision: u64,
+        bytes: &[u8],
+    ) -> Result<(), stravia_vendor_sdk::state::Error>;
+}
+
+impl BusinessCell for stravia_vendor_sdk::state::Cell {
+    fn load(
+        &self,
+    ) -> Result<stravia_vendor_sdk::state::Snapshot, stravia_vendor_sdk::state::Error> {
+        stravia_vendor_sdk::state::Cell::load(self)
+    }
+
+    fn compare_exchange(
+        &self,
+        revision: u64,
+        bytes: &[u8],
+    ) -> Result<(), stravia_vendor_sdk::state::Error> {
+        stravia_vendor_sdk::state::Cell::compare_exchange(self, revision, Some(bytes))
+    }
+}
+
+fn read_state(
+    host: &GuestHost,
+) -> Result<(stravia_vendor_sdk::state::Cell, PrivateState), PluginError> {
+    use stravia_vendor_sdk::state::{self, Scope};
+
+    let cell = state::open(Scope::Provider, "devin-business-v1").map_err(PluginError::from)?;
+    let state = initialize_state(&cell, || host.read_private_state())?;
+    Ok((cell, state))
+}
+
+fn initialize_state(
+    cell: &impl BusinessCell,
+    legacy: impl FnOnce() -> Result<Option<Vec<u8>>, PluginError>,
+) -> Result<PrivateState, PluginError> {
+    let snapshot = cell.load().map_err(PluginError::from)?;
+    if snapshot.revision == 0 && snapshot.payload.is_none() {
+        // Publish the legacy snapshot once. After a competing initializer wins,
+        // reload its value rather than importing stale private state again.
+        // The obsolete source is not rewritten: OAuth also uses private state,
+        // and its non-CAS API cannot safely clear only the old business fields.
+        let legacy = legacy()?;
+        let state = decode_state(legacy.as_deref())?;
+        let bytes = encode_state(&state)?;
+        match cell.compare_exchange(0, &bytes) {
+            Ok(()) => return Ok(state),
+            Err(stravia_vendor_sdk::state::Error::Conflict) => {}
+            Err(error) => return Err(error.into()),
+        }
+        let snapshot = cell.load().map_err(PluginError::from)?;
+        return decode_state(snapshot.payload.as_deref());
+    }
+    decode_state(snapshot.payload.as_deref())
+}
+
+fn update_state<T>(
+    cell: &impl BusinessCell,
+    mut update: impl FnMut(&mut PrivateState) -> T,
+) -> Result<T, PluginError> {
+    loop {
+        let snapshot = cell.load().map_err(PluginError::from)?;
+        let mut state = decode_state(snapshot.payload.as_deref())?;
+        let result = update(&mut state);
+        let bytes = encode_state(&state)?;
+        match cell.compare_exchange(snapshot.revision, &bytes) {
+            Ok(()) => return Ok(result),
+            Err(stravia_vendor_sdk::state::Error::Conflict) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn advance_session(
+    cell: &impl BusinessCell,
+    shape: SessionShape,
+) -> Result<SessionShape, PluginError> {
+    update_state(cell, |state| {
+        state.advance_session(SessionShape {
+            trajectory_id: shape.trajectory_id.clone(),
+            cascade_id: shape.cascade_id.clone(),
+            step_index: shape.step_index,
+        })
+    })
 }
 
 fn http_error(
@@ -709,6 +839,130 @@ fn error(kind: ErrorKind, message: impl Into<String>) -> PluginError {
 #[cfg(test)]
 mod session_tests {
     use super::*;
+
+    struct TestCell {
+        snapshot: std::cell::RefCell<stravia_vendor_sdk::state::Snapshot>,
+        concurrent_payload: std::cell::RefCell<Option<Vec<u8>>>,
+    }
+
+    impl TestCell {
+        fn new(revision: u64, payload: Option<Vec<u8>>) -> Self {
+            Self {
+                snapshot: std::cell::RefCell::new(stravia_vendor_sdk::state::Snapshot {
+                    revision,
+                    payload,
+                }),
+                concurrent_payload: std::cell::RefCell::new(None),
+            }
+        }
+    }
+
+    impl BusinessCell for TestCell {
+        fn load(
+            &self,
+        ) -> Result<stravia_vendor_sdk::state::Snapshot, stravia_vendor_sdk::state::Error> {
+            Ok(self.snapshot.borrow().clone())
+        }
+
+        fn compare_exchange(
+            &self,
+            revision: u64,
+            bytes: &[u8],
+        ) -> Result<(), stravia_vendor_sdk::state::Error> {
+            let mut snapshot = self.snapshot.borrow_mut();
+            if let Some(payload) = self.concurrent_payload.borrow_mut().take() {
+                snapshot.revision += 1;
+                snapshot.payload = Some(payload);
+            }
+            if snapshot.revision != revision {
+                return Err(stravia_vendor_sdk::state::Error::Conflict);
+            }
+            snapshot.revision += 1;
+            snapshot.payload = Some(bytes.to_vec());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn business_state_imports_legacy_only_before_first_publication() {
+        let cell = TestCell::new(0, None);
+        let imported =
+            initialize_state(&cell, || Ok(Some(br#"{"next_steps":{"old":9}}"#.to_vec()))).unwrap();
+        assert_eq!(imported.next_steps["old"], 9);
+        let reopened = initialize_state(&cell, || panic!("legacy must not be read again")).unwrap();
+        assert_eq!(reopened.next_steps["old"], 9);
+        let deleted = TestCell::new(8, None);
+        let state =
+            initialize_state(&deleted, || panic!("tombstone must not reimport legacy")).unwrap();
+        assert!(state.next_steps.is_empty());
+        assert!(state.assignments.is_empty());
+    }
+
+    #[test]
+    fn competing_initializer_wins_without_reimporting_legacy() {
+        let cell = TestCell::new(0, None);
+        *cell.concurrent_payload.borrow_mut() = Some(br#"{"next_steps":{"published":4}}"#.to_vec());
+        let state = initialize_state(&cell, || {
+            Ok(Some(br#"{"next_steps":{"stale":2}}"#.to_vec()))
+        })
+        .unwrap();
+        assert_eq!(state.next_steps["published"], 4);
+        assert!(!state.next_steps.contains_key("stale"));
+    }
+
+    #[test]
+    fn concurrent_affinity_update_preserves_other_steps_and_assignments() {
+        let cell = TestCell::new(1, Some(encode_state(&PrivateState::default()).unwrap()));
+        let mut other = PrivateState::default();
+        let other_shape = other.advance_session(session_shape(Some("other")));
+        let key = format!("router|{}", other_shape.cascade_id);
+        other.record_assignment(
+            &key,
+            &ModelAssignmentState {
+                jwt: "other-jwt".into(),
+                model_uid: "other-model".into(),
+            },
+        );
+        *cell.concurrent_payload.borrow_mut() = Some(encode_state(&other).unwrap());
+        let current = advance_session(&cell, session_shape(Some("current"))).unwrap();
+        assert_eq!(current.step_index, 0);
+        let mut state = decode_state(cell.load().unwrap().payload.as_deref()).unwrap();
+        assert_eq!(state.assignments[&key].jwt, "other-jwt");
+        assert_eq!(
+            state
+                .advance_session(session_shape(Some("other")))
+                .step_index,
+            2
+        );
+        assert_eq!(
+            state
+                .advance_session(session_shape(Some("current")))
+                .step_index,
+            2
+        );
+    }
+
+    #[test]
+    fn interactive_inference_headers_match_cli_order() {
+        let headers = connect_headers("token", true);
+        let names: Vec<&str> = headers.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "authorization",
+                "sentry-trace",
+                "content-type",
+                "connect-protocol-version",
+                "accept",
+                "host",
+                "content-length"
+            ]
+        );
+        assert_eq!(headers[0].1, "Basic token-token");
+        assert_eq!(headers[2].1, "application/connect+proto");
+        assert!(headers[5].1.is_empty());
+        assert!(headers[6].1.is_empty());
+    }
 
     #[test]
     fn connect_rejection_requires_json_true_declaration() {
@@ -833,6 +1087,7 @@ mod session_tests {
             shape,
             None,
             DevinClientPlatform::Linux,
+            "test-fingerprint",
         )
         .unwrap();
         let fields = parse_fields(&body).unwrap();
@@ -845,7 +1100,7 @@ mod session_tests {
     }
 
     #[test]
-    fn bounded_steps_preserve_existing_session_until_a_new_identity_requires_eviction() {
+    fn new_sessions_do_not_reset_existing_native_steps() {
         let mut state = PrivateState::default();
         for index in 0..256 {
             let affinity = format!("scoped/{index}");
@@ -858,15 +1113,69 @@ mod session_tests {
         }
         let resumed = state.advance_session(session_shape(Some("scoped/0")));
         assert_eq!(resumed.step_index, 2);
-        assert_eq!(state.next_steps.len(), 256);
         let fresh = state.advance_session(session_shape(Some("scoped/new")));
         assert_eq!(fresh.step_index, 0);
-        assert_eq!(state.next_steps.len(), 1);
+        assert_eq!(
+            state
+                .advance_session(session_shape(Some("scoped/0")))
+                .step_index,
+            3
+        );
         assert_eq!(
             state
                 .advance_session(session_shape(Some("scoped/new")))
                 .step_index,
             2
         );
+    }
+
+    #[test]
+    fn assignment_growth_preserves_cascade_bindings_and_native_steps() {
+        let mut state = PrivateState::default();
+        let first = state.advance_session(session_shape(Some("active-session")));
+        let first_key = format!("router|{}", first.cascade_id);
+        state.record_assignment(
+            &first_key,
+            &ModelAssignmentState {
+                jwt: "active-jwt".into(),
+                model_uid: "active-model".into(),
+            },
+        );
+        for index in 0..80 {
+            state.record_assignment(
+                &format!("router|cascade-{index}"),
+                &ModelAssignmentState {
+                    jwt: format!("jwt-{index}"),
+                    model_uid: format!("model-{index}"),
+                },
+            );
+        }
+        let mut restored = decode_state(Some(&encode_state(&state).unwrap())).unwrap();
+        assert_eq!(restored.assignments[&first_key].jwt, "active-jwt");
+        assert_eq!(restored.assignments[&first_key].model_uid, "active-model");
+        let resumed = restored.advance_session(session_shape(Some("active-session")));
+        assert_eq!(resumed.cascade_id, first.cascade_id);
+        assert_eq!(resumed.step_index, 2);
+    }
+
+    #[test]
+    fn legacy_auth_fields_are_not_imported_into_business_state() {
+        let legacy = br#"{
+            "state":"pending-auth",
+            "redirect_uri":"http://localhost/callback",
+            "code_verifier":"pending-verifier",
+            "manual":false,
+            "assignments":{"router|cascade":{"jwt":"bound-jwt","model_uid":"resolved"}},
+            "next_steps":{"trajectory":7}
+        }"#;
+        let state = decode_state(Some(legacy)).unwrap();
+        let migrated: Value = serde_json::from_slice(&encode_state(&state).unwrap()).unwrap();
+        assert_eq!(
+            migrated["assignments"]["router|cascade"]["jwt"],
+            "bound-jwt"
+        );
+        assert_eq!(migrated["next_steps"]["trajectory"], 7);
+        assert!(migrated.get("code_verifier").is_none());
+        assert!(migrated.get("state").is_none());
     }
 }

@@ -8,13 +8,14 @@ use std::sync::{
 use stravia_runtime_contract::protocol::ir::{AiErrorKind, AiRequest};
 use stravia_runtime_contract::{CancellationToken, Deadline};
 use stravia_vendor_runtime::{
-    HostFailure, HostHttpResponse, HostServices, HostWebSocket, HttpRequest, LoadedPlugin,
-    LogLevel, OperationScope, RuntimeError, RuntimeEvent,
+    HostFailure, HostHttpResponse, HostServices, HostWebSocket, LoadedPlugin, LogLevel,
+    OperationScope, RuntimeError, RuntimeEvent,
+    host::{HostStateCell, StateError, StateScope as AtomicStateScope},
 };
 use stravia_vendor_sdk::{
     AllowanceRequest, AuthRequest, ConfigValidationRequest, DiscoverRequest, ErrorKind,
     MODELS_SOURCE_CATALOG, MediaImageRequest, ModelMetadata, Operation, OperationInput,
-    OperationOutput, ProviderSnapshot, SearchRequest,
+    OperationOutput, ProviderSnapshot, SearchRequest, net,
 };
 use tokio::sync::{Mutex, mpsc};
 
@@ -24,9 +25,15 @@ use crate::interaction_observation::ProtectedSecrets;
 use crate::provider_models::ProviderModelRecord;
 
 use super::lifecycle::{VendorOperation, VendorPublicationFence};
+use super::manager::AdmittedPlugin;
 use super::network::VendorNetwork;
 use super::permissions::{NetworkPolicy, resolve_permissions};
 use super::store::{PluginStorageError, PluginStore};
+
+mod state;
+
+#[cfg(test)]
+mod alignment_tests;
 
 #[derive(Debug, Clone)]
 pub(crate) enum VendorRequest {
@@ -111,7 +118,17 @@ pub(crate) struct VendorExecution {
 #[error("vendor operation failed for its captured credential generation")]
 pub(crate) struct VendorFailureCredentialVersion(pub(crate) ProviderCredentialVersion);
 
+#[derive(Clone, Debug)]
+pub(crate) struct AtomicConversationContext {
+    pub(crate) principal: String,
+    pub(crate) admission_id: uuid::Uuid,
+    pub(crate) atomic_lease_id: uuid::Uuid,
+}
+
 pub(crate) struct VendorCallContext {
+    pub(crate) history_boundary_candidate:
+        Option<crate::generation_chain::HistoryBoundaryCandidate>,
+    pub(crate) atomic_state: Option<AtomicConversationContext>,
     pub(crate) cancellation: CancellationToken,
     pub(crate) deadline: Deadline,
     pub(crate) events: Option<mpsc::Sender<VendorEvent>>,
@@ -129,6 +146,8 @@ pub(crate) struct VendorCallContext {
 impl VendorCallContext {
     pub(crate) fn new(cancellation: CancellationToken, deadline: Deadline) -> Self {
         Self {
+            history_boundary_candidate: None,
+            atomic_state: None,
             cancellation,
             deadline,
             events: None,
@@ -148,7 +167,7 @@ impl VendorCallContext {
 #[derive(Clone)]
 pub(crate) struct VendorSessionScope {
     pub(crate) vendor_id: String,
-    pub(crate) plugin: LoadedPlugin,
+    pub(crate) plugin: AdmittedPlugin,
     pub(crate) data_epoch: i64,
     pub(crate) provider: ProviderSnapshot,
     pub(crate) private_state: Arc<Mutex<Option<Vec<u8>>>>,
@@ -157,7 +176,7 @@ pub(crate) struct VendorSessionScope {
 
 #[derive(Clone)]
 pub(crate) struct PreparedVendorExecution {
-    plugin: LoadedPlugin,
+    plugin: AdmittedPlugin,
     operation: Arc<VendorOperation>,
     data_epoch: i64,
     vendor_id: String,
@@ -185,11 +204,12 @@ impl PreparedVendorExecution {
     }
 
     pub(crate) fn pinned_component(&self) -> LoadedPlugin {
-        self.plugin.clone()
+        self.plugin.component.clone()
     }
 
     pub(crate) fn descriptor(&self) -> &stravia_vendor_sdk::ProviderDescriptor {
         self.plugin
+            .component
             .descriptor()
             .provider(&self.provider.provider_id)
             .expect("prepared execution retains its admitted provider profile")
@@ -245,6 +265,7 @@ impl Gateway {
             "vendor session provider identity does not match"
         );
         let descriptor = plugin
+            .component
             .descriptor()
             .provider(vendor_id)
             .ok_or_else(|| anyhow::anyhow!("loaded vendor plugin does not support the provider"))?;
@@ -295,7 +316,7 @@ impl Gateway {
         }
         let protocol = {
             let selection = self.vendor_plugins.runtime.select_protocol(
-                &prepared.plugin,
+                &prepared.plugin.component,
                 prepared.kind,
                 &prepared.provider,
                 request,
@@ -407,7 +428,7 @@ impl Gateway {
     async fn prepare_vendor_execution_with_admission(
         &self,
         vendor_id: &str,
-        plugin: LoadedPlugin,
+        plugin: AdmittedPlugin,
         operation: Arc<VendorOperation>,
         data_epoch: i64,
         provider_id: &str,
@@ -441,9 +462,13 @@ impl Gateway {
             )
             .await?;
 
-            let descriptor = plugin.descriptor().provider(vendor_id).ok_or_else(|| {
-                anyhow::anyhow!("loaded vendor plugin does not support the provider")
-            })?;
+            let descriptor = plugin
+                .component
+                .descriptor()
+                .provider(vendor_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("loaded vendor plugin does not support the provider")
+                })?;
             let effective_models_source = if kind == Operation::Discover {
                 self.provider_catalog
                     .resolve_models_source(
@@ -537,6 +562,10 @@ impl Gateway {
                 effective_models_source,
                 context,
             )?;
+            provider.operation_metadata.insert(
+                "client_installation_id".into(),
+                Value::String(self.client_installation_id.to_string()),
+            );
             if let Some(models) = catalog_models {
                 provider
                     .operation_metadata
@@ -599,6 +628,10 @@ impl Gateway {
                         .and_then(Value::as_str),
                     context,
                 )?;
+                provider.operation_metadata.insert(
+                    "client_installation_id".into(),
+                    Value::String(self.client_installation_id.to_string()),
+                );
                 if let Some(models) = catalog_models {
                     provider
                         .operation_metadata
@@ -722,6 +755,7 @@ impl Gateway {
             if !matches!(
                 key.as_str(),
                 "host_platform"
+                    | "client_installation_id"
                     | "egress_protocol"
                     | "egress_base_url"
                     | "models_source"
@@ -796,6 +830,7 @@ impl Gateway {
         );
         let descriptor = session
             .plugin
+            .component
             .descriptor()
             .provider(&session.vendor_id)
             .ok_or_else(|| anyhow::anyhow!("vendor session profile is unavailable"))?;
@@ -804,7 +839,7 @@ impl Gateway {
             Operation::ConfigValidation | Operation::ConnectionCheck
         ) {
             anyhow::ensure!(
-                current_plugin.identity() == session.plugin.identity(),
+                current_plugin.component.identity() == session.plugin.component.identity(),
                 "vendor plugin changed while preparing the connection snapshot"
             );
         }
@@ -819,6 +854,10 @@ impl Gateway {
             Value::String(provider.protocol.clone()),
         );
         apply_host_metadata(&mut provider.operation_metadata);
+        provider.operation_metadata.insert(
+            "client_installation_id".into(),
+            Value::String(self.client_installation_id.to_string()),
+        );
         let use_proxy = provider
             .operation_metadata
             .get("use_proxy")
@@ -918,7 +957,7 @@ impl Gateway {
     )]
     async fn execute_vendor_input(
         &self,
-        plugin: LoadedPlugin,
+        plugin: AdmittedPlugin,
         operation: Arc<VendorOperation>,
         data_epoch: i64,
         provider_id: Option<String>,
@@ -938,12 +977,17 @@ impl Gateway {
         operation.ensure_current()?;
 
         let descriptor = plugin
+            .component
             .descriptor()
             .provider(&provider.provider_id)
             .ok_or_else(|| anyhow::anyhow!("vendor operation profile is unavailable"))?;
-        let clients = self
-            .vendor_client_snapshot(use_proxy, &provider.options)
-            .await?;
+        let mut proxy = self.vendor_proxy_snapshot(use_proxy).await?;
+        let profile = stravia_vendor_sdk::transport::TransportProfile::from_options(&provider.options)
+            .map_err(anyhow::Error::msg)?;
+        if profile.http1_only {
+            proxy.force_http1();
+        }
+        let shapes = plugin.shapes.with_transport_profile(&profile)?;
         if context.cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled.into());
         }
@@ -953,16 +997,43 @@ impl Gateway {
         operation.ensure_current()?;
         let websocket_scope = websocket_scope_key(
             provider_id.as_deref(),
-            plugin.identity(),
+            plugin.component.identity(),
             &provider.credentials,
-            &clients.websocket_reuse_identity,
+            &proxy.reuse_identity()?,
         )?;
         let websocket_affinity = provider_id
             .as_ref()
             .and_then(|_| context.websocket_affinity.clone());
+        let cookie_fence = if let Some(provider_id) = provider_id.as_deref() {
+            let volatile = self
+                .vendor_plugins
+                .store
+                .volatile_store()
+                .ok_or_else(|| anyhow::anyhow!("volatile state is unavailable"))?;
+            let _guard = tokio::select! {
+                biased;
+                _ = context.cancellation.cancelled() => return Err(RuntimeError::Cancelled.into()),
+                _ = operation.cancellation().cancelled() => return Err(RuntimeError::Cancelled.into()),
+                guard = volatile.read() => guard,
+            };
+            operation.ensure_current()?;
+            Some(tokio::select! {
+                biased;
+                _ = context.cancellation.cancelled() => return Err(RuntimeError::Cancelled.into()),
+                _ = operation.cancellation().cancelled() => return Err(RuntimeError::Cancelled.into()),
+                result = self.vendor_plugins.store.open_atomic_provider_fence(&descriptor.provider_id, provider_id, data_epoch) => result?,
+            })
+        } else {
+            None
+        };
+        operation.ensure_current()?;
         let network = VendorNetwork::new(
-            clients.http,
-            clients.websocket,
+            Arc::clone(&self.vendor_transport),
+            super::network::VendorNetworkConfig {
+                shapes,
+                resolver: Arc::clone(&self.vendor_resolver),
+            },
+            { let mut settings = proxy.into_settings(); settings.force_http1 |= profile.http1_only; settings },
             origins,
             operation.clone(),
             context.cancellation.clone(),
@@ -977,6 +1048,16 @@ impl Gateway {
             websocket_scope,
             websocket_affinity,
         );
+        let network = match (provider_id.as_ref(), cookie_fence) {
+            (Some(provider_id), Some(fence)) => network.with_cookie_scope(
+                self.vendor_plugins.store.clone(),
+                descriptor.provider_id.clone(),
+                provider_id.clone(),
+                data_epoch,
+                fence,
+            ),
+            _ => network,
+        };
         let secrets = context
             .observer
             .as_ref()
@@ -1004,6 +1085,8 @@ impl Gateway {
             events: context.events.clone(),
             publication: publication.clone(),
             state,
+            atomic_state: context.atomic_state.clone(),
+            history_boundary_candidate: context.history_boundary_candidate.clone(),
             secrets,
             event_delivery_failed: AtomicBool::new(false),
         });
@@ -1020,10 +1103,13 @@ impl Gateway {
         let (sdk_operation, sdk_input) = request
             .encode_for_host(provider)
             .map_err(|_| RuntimeError::InvalidOutput)?;
-        let execution =
-            self.vendor_plugins
-                .runtime
-                .execute(&plugin, &channel, sdk_operation, sdk_input, scope);
+        let execution = self.vendor_plugins.runtime.execute(
+            &plugin.component,
+            &channel,
+            sdk_operation,
+            sdk_input,
+            scope,
+        );
         let output = tokio::select! {
             biased;
             _ = context.cancellation.cancelled() => {
@@ -1449,8 +1535,41 @@ struct ScopedHostServices {
     events: Option<mpsc::Sender<VendorEvent>>,
     publication: VendorPublicationFence,
     state: StateScope,
+    atomic_state: Option<AtomicConversationContext>,
+    history_boundary_candidate: Option<crate::generation_chain::HistoryBoundaryCandidate>,
     secrets: ProtectedSecrets,
     event_delivery_failed: AtomicBool,
+}
+
+#[cfg(test)]
+pub(crate) fn released_compat_services(
+    network: VendorNetwork,
+    store: PluginStore,
+    provider_id: String,
+    operation: Arc<VendorOperation>,
+    cancellation: CancellationToken,
+    deadline: Deadline,
+    events: mpsc::Sender<VendorEvent>,
+) -> Arc<dyn HostServices> {
+    let publication = operation.publication_fence(cancellation.clone(), deadline);
+    Arc::new(ScopedHostServices {
+        network,
+        operation,
+        cancellation,
+        events: Some(events),
+        publication,
+        state: StateScope::Provider {
+            store,
+            vendor_id: "fixture.net-1-0-compat".into(),
+            provider_id,
+            data_epoch: 1,
+            format_version: "1".into(),
+        },
+        atomic_state: None,
+        history_boundary_candidate: None,
+        secrets: ProtectedSecrets::default(),
+        event_delivery_failed: AtomicBool::new(false),
+    })
 }
 
 impl ScopedHostServices {
@@ -1462,30 +1581,51 @@ impl ScopedHostServices {
             .ensure_current()
             .map_err(|_| cancelled_failure())
     }
+}
 
-    fn register_state_secrets(&self, bytes: &[u8]) {
-        if let Ok(text) = std::str::from_utf8(bytes) {
-            self.secrets.register([text]);
-        }
-        if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
-            register_value_secrets(&self.secrets, &value);
-        }
+fn register_state_secrets(secrets: &ProtectedSecrets, bytes: &[u8]) {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        secrets.register([text]);
+    }
+    if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+        register_value_secrets(secrets, &value);
     }
 }
 
 #[async_trait]
 impl HostServices for ScopedHostServices {
-    fn http_start(&self, request: HttpRequest) -> Result<Arc<dyn HostHttpResponse>, HostFailure> {
+    async fn open_volatile_state(&self, key: String) -> Result<Arc<dyn HostStateCell>, StateError> {
+        self.open_volatile_cell(key).await
+    }
+
+    async fn open_state(
+        &self,
+        scope: AtomicStateScope,
+        key: String,
+    ) -> Result<Arc<dyn HostStateCell>, StateError> {
+        self.open_atomic_cell(scope, key).await
+    }
+
+    fn validate_net_option(&self, key: &str, value: &str) -> Result<(), net::OptionError> {
+        self.network.validate_net_option(key, value)
+    }
+
+    fn http_start(
+        &self,
+        request: net::Request,
+        options: net::Options,
+    ) -> Result<Arc<dyn HostHttpResponse>, HostFailure> {
         self.ensure_current()?;
-        self.network.http_start(request)
+        self.network.http_start(request, options)
     }
 
     async fn ws_connect(
         &self,
-        request: stravia_vendor_runtime::WsRequest,
+        request: net::ConnectRequest,
+        options: net::Options,
     ) -> Result<Arc<dyn HostWebSocket>, HostFailure> {
         self.ensure_current()?;
-        self.network.ws_connect(request).await
+        self.network.ws_connect(request, options).await
     }
 
     async fn read_private_state(&self) -> Result<Option<Vec<u8>>, HostFailure> {
@@ -1530,7 +1670,7 @@ impl HostServices for ScopedHostServices {
         };
         self.ensure_current()?;
         if let Some(bytes) = &result {
-            self.register_state_secrets(bytes);
+            register_state_secrets(&self.secrets, bytes);
         }
         Ok(result)
     }
@@ -1543,7 +1683,7 @@ impl HostServices for ScopedHostServices {
             .await
             .map_err(|_| cancelled_failure())?;
         self.ensure_current()?;
-        self.register_state_secrets(&bytes);
+        register_state_secrets(&self.secrets, &bytes);
         match &self.state {
             StateScope::Provider {
                 store,
@@ -1697,8 +1837,10 @@ fn storage_failure() -> HostFailure {
 
 fn plugin_storage_failure(error: PluginStorageError) -> HostFailure {
     match error {
-        PluginStorageError::StaleOperation | PluginStorageError::Changed => cancelled_failure(),
-        PluginStorageError::Storage => storage_failure(),
+        PluginStorageError::StaleOperation
+        | PluginStorageError::Changed
+        | PluginStorageError::MissingLineage => cancelled_failure(),
+        PluginStorageError::Storage | PluginStorageError::Limit => storage_failure(),
     }
 }
 

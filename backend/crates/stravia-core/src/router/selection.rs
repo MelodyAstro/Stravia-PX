@@ -459,6 +459,7 @@ mod tests {
             supported_thinking_levels: Vec::new(),
             context_window: None,
             supports_image_input: false,
+            supports_remote_compaction: false,
             targets,
             default_thinking_level: None,
             billing: None,
@@ -842,6 +843,9 @@ mod tests {
     }
 
     impl Storage for FixtureStorage {
+        fn prompt_admissions(&self) -> std::sync::Arc<dyn crate::storage::PromptAdmissionStore> {
+            self.delegate.prompt_admissions()
+        }
         fn vendor_plugins(&self) -> &crate::plugin::PluginStore {
             self.delegate.vendor_plugins()
         }

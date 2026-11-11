@@ -10,11 +10,12 @@ use stravia_vendor_common::account::first_account_label;
 use stravia_vendor_common::common;
 use stravia_vendor_common::connection_check::{self, invalid_response};
 use stravia_vendor_common::plan::display_name;
+use stravia_vendor_sdk::net::Request;
 use stravia_vendor_sdk::{
     AllowanceAmount, AllowanceBilling, AllowanceBillingKind, AllowanceBillingPeriod,
     AllowanceBillingPrice, AllowanceItem, AllowanceResponse, ConnectionCheckResponse,
-    ConnectionCheckVerification, GuestHost, HttpRequest, ModelAllowance, PluginError,
-    ProviderSnapshot, read_http_body,
+    ConnectionCheckVerification, GuestHost, ModelAllowance, PluginError, ProviderSnapshot,
+    read_http_body,
 };
 
 use crate::request::{DEFAULT_CLIENT_VERSION, cli_user_agent};
@@ -33,7 +34,7 @@ pub(crate) fn execute(
     provider: &ProviderSnapshot,
 ) -> Result<AllowanceResponse, PluginError> {
     let access_token = access_token(provider)?;
-    let response = host.http_start(usage_request(provider, access_token))?;
+    let response = host.http_start(usage_request(provider, access_token), &crate::net_options())?;
     let status = response.status()?;
     let headers = response.headers()?;
     let body = read_http_body(&response, MAX_USAGE_BODY)?;
@@ -63,32 +64,27 @@ pub(crate) fn connection_check(
     host: &GuestHost,
     provider: &ProviderSnapshot,
 ) -> Result<ConnectionCheckResponse, PluginError> {
-    let value = connection_check::json(host, usage_request(provider, access_token(provider)?))?;
+    let response = host.http_start(
+        usage_request(provider, access_token(provider)?),
+        &crate::net_options(),
+    )?;
+    let value = connection_check::read_json(&response)?;
     validate_usage(&value)?;
     Ok(ConnectionCheckResponse {
         verified: ConnectionCheckVerification::Credentials,
     })
 }
 
-fn usage_request(provider: &ProviderSnapshot, access_token: &str) -> HttpRequest {
-    let mut request = HttpRequest {
-        method: "GET".into(),
-        url: USAGE_URL.into(),
-        headers: vec![
+fn usage_request(provider: &ProviderSnapshot, access_token: &str) -> Request {
+    let mut headers = vec![
             ("accept".into(), "application/json, text/plain, */*".into()),
             ("anthropic-beta".into(), USAGE_BETAS.into()),
             ("content-type".into(), "application/json".into()),
             ("user-agent".into(), cli_user_agent(DEFAULT_CLIENT_VERSION)),
             ("authorization".into(), format!("Bearer {access_token}")),
-        ],
-        body: Vec::new(),
-    };
-    stravia_vendor_common::identity::apply_claude(
-        provider,
-        &mut request.headers,
-        DEFAULT_CLIENT_VERSION,
-    );
-    request
+        ];
+    stravia_vendor_common::identity::apply_claude(provider, &mut headers, DEFAULT_CLIENT_VERSION);
+    crate::net_request("GET", USAGE_URL, headers, Vec::new())
 }
 
 /// 接受 `limits` 的空列表和缺省窗口；只要出现的已知字段类型正确即可通过，
@@ -129,26 +125,16 @@ fn validate_usage(value: &Value) -> Result<(), PluginError> {
 
 /// 取规范化订阅标识（见 `profile_plan`）。profile 接口只用于展示与计费建议，
 /// 失败或无 `user:profile` 权限时降级为 `None`，不让一次附加请求拖垮额度刷新。
-fn fetch_profile_plan(
-    host: &GuestHost,
-    provider: &ProviderSnapshot,
-    access_token: &str,
-) -> Option<String> {
+fn fetch_profile_plan(host: &GuestHost, provider: &ProviderSnapshot, access_token: &str) -> Option<String> {
     let mut headers = vec![
-        ("accept".into(), "application/json, text/plain, */*".into()),
-        ("anthropic-beta".into(), "oauth-2025-04-20".into()),
-        ("content-type".into(), "application/json".into()),
-        ("authorization".into(), format!("Bearer {access_token}")),
-    ];
+                    ("accept".into(), "application/json, text/plain, */*".into()),
+                    ("anthropic-beta".into(), "oauth-2025-04-20".into()),
+                    ("content-type".into(), "application/json".into()),
+                    ("user-agent".into(), cli_user_agent(DEFAULT_CLIENT_VERSION)),
+                    ("authorization".into(), format!("Bearer {access_token}")),
+                ];
     stravia_vendor_common::identity::apply_claude(provider, &mut headers, DEFAULT_CLIENT_VERSION);
-    let response = host
-        .http_start(HttpRequest {
-            method: "GET".into(),
-            url: PROFILE_URL.into(),
-            headers,
-            body: Vec::new(),
-        })
-        .ok()?;
+    let response = host.http_start(crate::net_request("GET", PROFILE_URL, headers, Vec::new()), &crate::net_options()).ok()?;
     if !(200..300).contains(&response.status().ok()?) {
         return None;
     }

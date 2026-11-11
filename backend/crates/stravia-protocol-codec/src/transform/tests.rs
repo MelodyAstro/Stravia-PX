@@ -36,6 +36,142 @@ use stravia_runtime_contract::protocol::ir::Role;
 use stravia_runtime_contract::protocol::ir::ToolCall;
 
 #[test]
+fn gemini_tool_result_attachments_keep_payloads_and_call_boundaries() {
+    let pair = ProtocolTransform::global()
+        .bind(
+            GOOGLE_GEMINI_GENERATE_CONTENT_V1BETA,
+            GOOGLE_GEMINI_GENERATE_CONTENT_V1BETA,
+        )
+        .unwrap();
+    let results = json!([
+        {"id":"image-call","name":"read_file","response":{
+            "output":"chart", "parts":[{"type":"text","text":"business data"}]
+        },"parts":[
+            {"inlineData":{"mimeType":"image/png","data":"aW1hZ2U="}},
+            {"fileData":{"mimeType":"image/jpeg","fileUri":"https://example.test/chart.jpg"}}
+        ]},
+        {"id":"pdf-call","name":"read_file","response":{"output":"report","count":2},
+         "parts":[{"inlineData":{"mimeType":"application/pdf","data":"JVBERi0xLjQ="}}]}
+    ]);
+    let request = pair.decode_request(json!({
+        "contents":[
+            {"role":"user","parts":[{"text":"Read both files."}]},
+            {"role":"model","parts":[
+                {"functionCall":{"id":"pdf-call","name":"read_file","args":{"Path":"report.pdf"}},"thoughtSignature":"c2lnbmF0dXJl"},
+                {"functionCall":{"id":"image-call","name":"read_file","args":{"Path":"chart.png"}}}
+            ]},
+            {"role":"model","parts":[
+                {"functionResponse":results[0]},
+                {"functionResponse":results[1]}
+            ]}
+        ]
+    })).unwrap();
+    let restored: AiRequest =
+        serde_json::from_value(serde_json::to_value(request).unwrap()).unwrap();
+    let body = pair.encode_request(restored).unwrap().body;
+    let parts = body["contents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|content| content["parts"].as_array().unwrap());
+    let actual: Vec<_> = parts
+        .filter_map(|part| part.get("functionResponse"))
+        .cloned()
+        .collect();
+    assert_eq!(actual.len(), 2);
+    for (actual, expected) in actual.iter().zip(results.as_array().unwrap()) {
+        for key in ["id", "name", "response"] {
+            assert_eq!(actual[key], expected[key]);
+        }
+        let actual_parts = actual["parts"].as_array().unwrap();
+        let expected_parts = expected["parts"].as_array().unwrap();
+        assert_eq!(actual_parts.len(), expected_parts.len());
+        for (actual, expected) in actual_parts.iter().zip(expected_parts) {
+            if expected.get("inlineData").is_some() {
+                assert_eq!(actual["inlineData"], expected["inlineData"]);
+            } else {
+                // URL 图片沿用现有 canonical 载体；验证资源身份，不要求可选 MIME 提示逐字回放。
+                assert_eq!(
+                    actual["fileData"]["fileUri"],
+                    expected["fileData"]["fileUri"]
+                );
+            }
+        }
+    }
+    let signed_call = body["contents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|content| content["parts"].as_array().unwrap())
+        .find(|part| part["functionCall"]["id"] == "pdf-call")
+        .unwrap();
+    assert_eq!(signed_call["thoughtSignature"], "c2lnbmF0dXJl");
+}
+
+#[test]
+fn gemini_tool_result_media_converts_with_its_business_json() {
+    for target in [ANTHROPIC_MESSAGES_2023_06_01, OPEN_RESPONSES_2026_04_24] {
+        let pair = ProtocolTransform::global()
+            .bind(GOOGLE_GEMINI_GENERATE_CONTENT_V1BETA, target)
+            .unwrap();
+        let request = pair.decode_request(json!({
+            "contents":[
+                {"role":"model","parts":[{"functionCall":{"id":"read-1","name":"read_file","args":{}}}]},
+                {"role":"user","parts":[{"functionResponse":{
+                    "id":"read-1","name":"read_file","response":{"receipt":"receipt-42"},
+                    "parts":[
+                        {"inlineData":{"mimeType":"image/png","data":"aW1hZ2U="}},
+                        {"fileData":{"mimeType":"application/pdf","fileUri":"https://example.test/report.pdf"}}
+                    ]
+                }}]}
+            ]
+        })).unwrap();
+        let body = pair.encode_request(request).unwrap().body;
+        if target == ANTHROPIC_MESSAGES_2023_06_01 {
+            let result = body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|message| message["content"].as_array().unwrap())
+                .find(|block| block["type"] == "tool_result")
+                .unwrap();
+            assert_eq!(result["tool_use_id"], "read-1");
+            assert_eq!(
+                serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap())
+                    .unwrap(),
+                json!({"receipt":"receipt-42"})
+            );
+            assert_eq!(result["content"][1]["source"]["data"], "aW1hZ2U=");
+            assert_eq!(
+                result["content"][2]["source"]["url"],
+                "https://example.test/report.pdf"
+            );
+        } else {
+            let result = body["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["type"] == "function_call_output")
+                .unwrap();
+            assert_eq!(result["call_id"], "read-1");
+            assert_eq!(
+                serde_json::from_str::<Value>(result["output"][0]["text"].as_str().unwrap())
+                    .unwrap(),
+                json!({"receipt":"receipt-42"})
+            );
+            assert_eq!(
+                result["output"][1]["image_url"],
+                "data:image/png;base64,aW1hZ2U="
+            );
+            assert_eq!(
+                result["output"][2]["file_url"],
+                "https://example.test/report.pdf"
+            );
+        }
+    }
+}
+
+#[test]
 fn gemini_canonical_sampling_changes_override_retained_native_config() {
     let pair = ProtocolTransform::global()
         .bind(
@@ -915,6 +1051,33 @@ fn explicit_chat_reasoning_presence_stays_native_across_response_roundtrips() {
 }
 
 #[test]
+fn prune_reports_original_indices_across_both_removal_passes() {
+    let duplicate = AiItem::output_text("same");
+    let mut empty = AiItem::output_text("discarded");
+    empty.content = MessageContent::Blocks(Vec::new());
+    let mut request = AiRequest::new(
+        "model",
+        vec![
+            duplicate.clone(),
+            AiItem::unknown(json!({"type":"unknown"})),
+            duplicate,
+            empty,
+        ],
+    );
+    request.meta.source_protocol = Some(OPEN_RESPONSES_2026_04_24);
+    let capabilities = super::adapter(ANTHROPIC_MESSAGES_2023_06_01)
+        .unwrap()
+        .capabilities();
+    let removed = ProtocolTransform::prune_request_for_with_removals(
+        ANTHROPIC_MESSAGES_2023_06_01,
+        capabilities,
+        &mut request,
+    );
+    assert_eq!(removed, vec![1, 3]);
+    assert_eq!(request.items.len(), 2);
+}
+
+#[test]
 fn replay_drops_only_empty_thinking_and_retains_tools_and_hard_fields() {
     let pair = ProtocolTransform::global()
         .bind(
@@ -1421,16 +1584,13 @@ fn anthropic_compaction_summary_survives_as_text_on_targets_without_the_block() 
 
 #[test]
 fn anthropic_target_replays_an_anthropic_state_a_responses_client_carried() {
-    let resource = crate::codec::compaction::responses_compaction_from_anthropic(&json!({
-        "type": "message",
-        "content": [{"type": "compaction", "content": "Refactored the parser", "signature": "sig-1"}],
-        "stop_reason": "compaction",
-        "usage": {"input_tokens": 0, "output_tokens": 0}
-    }))
-    .unwrap();
+    let state = json!({"type": "compaction", "id": crate::codec::compaction::anthropic_state_id("sig-1"),
+    "encrypted_content": crate::codec::compaction::seal_anthropic(&json!({
+        "type": "compaction", "content": "Refactored the parser", "signature": "sig-1",
+    }))});
     let responses_history = json!({
         "model": "claude",
-        "input": [resource["output"][0].clone(), {"role": "user", "content": "keep going"}]
+        "input": [state, {"role": "user", "content": "keep going"}]
     });
     let to_anthropic = ProtocolTransform::global()
         .bind(OPEN_RESPONSES_2026_04_24, ANTHROPIC_MESSAGES_2023_06_01)
@@ -1463,14 +1623,10 @@ fn foreign_target_downgrade_applies_only_when_every_state_is_readable() {
     let pair = ProtocolTransform::global()
         .bind(OPEN_RESPONSES_2026_04_24, OPEN_RESPONSES_2026_04_24)
         .unwrap();
-    let anthropic_state = crate::codec::compaction::responses_compaction_from_anthropic(&json!({
-        "type": "message",
-        "content": [{"type": "compaction", "content": "Summary", "signature": "sig-1"}],
-        "stop_reason": "compaction",
-        "usage": {"input_tokens": 0, "output_tokens": 0}
-    }))
-    .unwrap()["output"][0]
-        .clone();
+    let anthropic_state = json!({"type": "compaction", "id": crate::codec::compaction::anthropic_state_id("sig-1"),
+    "encrypted_content": crate::codec::compaction::seal_anthropic(&json!({
+        "type": "compaction", "content": "Summary", "signature": "sig-1",
+    }))});
     let responses_state =
         json!({"type": "compaction", "id": "cmp_r", "encrypted_content": "opaque"});
 

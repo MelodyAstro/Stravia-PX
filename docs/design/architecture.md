@@ -10,7 +10,7 @@ Stravia 定位为本地运行、可自托管的 **Agent infra（智能体基础�
 
 Stravia 可作为**桌面应用**在本地运行，也可作为**独立服务端**自托管，管理与配置由部署者控制。自托管不代表请求数据始终留在本机：模型调用和外部工具访问仍会发送至配置的上游服务。
 
-平台生成的随机不透明 ID 固定为 28 位 ASCII 小写字母，由密码学安全随机生成器在 `a`–`z` 中均匀采样（约 131.6 bit）。完整 SHA-256 派生身份使用 55 位 ASCII 小写字母的定长 base-26 编码，不截断 256-bit 摘要。协议外壳各自独立：Artifact Reference 为 `stravia://artifacts/<55 位 ID>`，Turn Reference 为 `stravia://turns/<28 位 ID>`，Search Source 为 `stravia://turns/<28 位 ID>/sources/<ordinal>`；History Marker 为 `<!--sh:<28 位 ID>-->`，Projection Delimiter 为 `<!--sp:<28 位 ID>:<t|p>:<ordinal>:<s|e>-->`，可逆脱敏引用为 `<!--sr:<28 位 ID>-->`。平台资源自身统一以 `path` 输出，续接统一使用 `previous_path` 和完整 Turn URI；报告正文以方括号包裹完整 Artifact 或 Search Source URI，媒体 bridge 不再使用 `sm`／`st` 短提示。外壳不授予访问权；外部 Provider／客户端 ID、Codex UUID 请求／连接元数据和真实凭据 token 保持其协议格式。协议修复保留请求内确定性定位符，不额外为临时序号计算内容摘要。Open Responses item 保留 `<type>_<原样 response ID>_<ordinal>` 的可逆定位结构。旧 `sa:`、裸 Turn ID 与 `[sc:...]`／`[sm:...]`／`[st:...]` 不提供兼容解析；已有历史不批量重写或删除，旧历史引用可能明确失败。
+平台生成的随机不透明 ID 固定为 28 位 ASCII 小写字母，由密码学安全随机生成器在 `a`–`z` 中均匀采样（约 131.6 bit）。完整 SHA-256 派生身份使用 55 位 ASCII 小写字母的定长 base-26 编码，不截断 256-bit 摘要。协议外壳各自独立：Artifact Reference 为 `stravia://artifacts/<55 位 ID>`，Turn Reference 为 `stravia://turns/<28 位 ID>`，Search Source 为 `stravia://turns/<28 位 ID>/sources/<ordinal>`；History Marker 为 `<!--sh:<28 位 ID>-->`，Projection Delimiter 为 `<!--sp:<28 位 ID>:<t|p>:<ordinal>:<s|e>-->`，可逆脱敏引用为 `<!--sr:<28 位 ID>-->`。平台资源自身统一以 `path` 输出，续接统一使用 `previous_path` 和完整 Turn URI（StraviaRead 例外：续接直接把完整 Turn URI 作为 `path`）；报告正文以方括号包裹完整 Artifact 或 Search Source URI，媒体 bridge 不再使用 `sm`／`st` 短提示。外壳不授予访问权；外部 Provider／客户端 ID、Codex UUID 请求／连接元数据和真实凭据 token 保持其协议格式。协议修复保留请求内确定性定位符，不额外为临时序号计算内容摘要。Open Responses item 保留 `<type>_<原样 response ID>_<ordinal>` 的可逆定位结构。旧 `sa:`、裸 Turn ID 与 `[sc:...]`／`[sm:...]`／`[st:...]` 不提供兼容解析；已有历史不批量重写或删除，旧历史引用可能明确失败。
 
 ```
 Claude Code · Codex CLI · Gemini CLI · OpenCode
@@ -75,7 +75,7 @@ stravia/
 │           │   ├── auth.rs
 │           │   ├── context.rs    # RequestContext / ContextBag
 │           │   ├── handler.rs    # models_list 只读端点（≤110 行）
-│           │   ├── artifacts.rs  # multipart upload / signed download adapters
+│           │   ├── artifacts.rs  # 单请求 upload / signed download adapters
 │           │   ├── security.rs   # crate-private client credential policy deep module
 │           │   ├── server.rs     # axum HTTP Server 启动
 │           │   ├── server/tests.rs   # Proxy HTTP 装配契约
@@ -222,7 +222,9 @@ Linux 开发先安装 [Nix 与 devenv](https://devenv.sh/getting-started/)，在
 
 工具链及服务配置集中在 `devenv.nix`。Rust/Bun 由 language 模块提供，版本分别以 `rust-toolchain.toml`、`package.json` 为准；原生 C/C++ 和 Rust 统一使用 Clang，Linux 链接使用 mold，不修改宿主机或 `.cargo/config.toml`。更新输入使用 `devenv update`，并一并保留 `devenv.lock`。
 
-进入 linked worktree 时，从主 worktree 通过 reflink 补齐缺失的 `.stravia-dev` 和 `target`，不合并或覆盖现有目录。初始化按 worktree 加锁，每个目录暂存后原子发布；不支持 reflink 或跨文件系统时阻止进入 shell，不退回完整复制。
+固定版本的 `patch-crate` 由 `nix/patch-crate.nix` 提供，开发环境与发行包构建复用同一份定义。Nix store 在工作区之间共享工具产物，避免每个 worktree 都执行 `cargo install`；无可用二进制缓存时仍需首次构建。非 Nix 环境沿用 `task prepare:crates` 的按需安装流程。
+
+进入 linked worktree 时，从主 worktree 通过 reflink 补齐缺失的 `.stravia-dev`，并选择性预热缺失的 `target`：仅复制 `patch`、debug/release 各自的 `deps`、`.fingerprint`、`build`，以及 `vendor-plugins`、`vendor-plugins-all`。不复制 incremental、profile 根目录可执行文件或测试临时产物，以减少逐文件创建元数据的成本；需要时由构建重新生成。现有目录不合并或覆盖，初始化按 worktree 加锁，每个目录暂存后原子发布；不支持 reflink 或跨文件系统时阻止进入 shell，不退回完整复制。
 
 初始化前应停止主 worktree 的应用与构建：逐文件复制不是原子快照，也不是 SQLite/WAL 在线备份。复制包含配置凭据，外部 PostgreSQL、Redis 连接不会自动隔离，启动新实例前须确认连接目标。`target` 只用于预热，Cargo 仍可能重新编译。
 
@@ -280,7 +282,7 @@ nix build .#checks.x86_64-linux.service
 
 设置页维护共享代理地址及绕过规则，不再提供全局启用开关。`outbound_proxy` 是 settings 中一行 JSON（`url`、`bypass`、`force_http1`）：一次 PUT 提交完整配置，一次读取取得完整快照，验证或持久化失败保留原配置。URL 为空表示尚未配置；非空仅接受可用的 `http`、`https`、`socks5`、`socks5h` 代理地址。保存和使用边界均拒绝未知 scheme，不静默改为直连；错误不回显可能含凭据的 URL，保存并不检查代理在线或认证成功。Core reqwest 的 `socks5` 在本机解析目标，`socks5h` 将目标域名交给代理解析；LocalWeb 保留 ADR-0026 的既有代理侧 DNS 策略（其 `socks5` 规范化为 `socks5h`），不据此推断 Core 的 DNS 行为。读取迁移留下的非法旧 URL 不阻断管理编辑，使用时仍须校验并失败关闭。
 
-模型 Provider/session 与 Web Provider 各自的 `use_proxy` 是唯一选择：关闭明确直连，开启必须使用已保存的有效配置。产品更新有独立的 `update_use_proxy`（缺省 false），用于 Gateway 的 release/manifest 检查及 Desktop updater 检查、下载；改变更新偏好不修改 Provider 或共享代理配置。Provider Catalog 与 S3 不在这一选择范围。`force_http1` 保留既有 Vendor HTTP 专用行为，不改变 Web Access 或产品更新的 HTTP 协商；Vendor WS 本来就使用 HTTP/1。
+模型 Provider/session 与 Web Provider 各自的 `use_proxy` 是唯一选择：关闭明确直连，开启必须使用已保存的有效配置。产品更新有独立的 `update_use_proxy`（缺省 false），用于 Gateway 的 release/manifest 检查及 Desktop updater 检查、下载；改变更新偏好不修改 Provider 或共享代理配置。Provider Catalog 与 S3 不在这一选择范围。`force_http1` 保留 Vendor HTTP 专用行为，不改变 Web Access 或产品更新的 HTTP 协商；Vendor WebSocket 传输由网络选项和 shape 决定。
 
 显式代理的 `bypass` 按逗号分隔主机/IP/域后缀，匹配不区分大小写并忽略条目周围空白；匹配目标直连，其余目标经代理。绕过应用于模型 HTTP/WS、Web Access 的 HTTP/浏览器出口和更新下载/重定向，不依赖进程全局 `NO_PROXY`，也不放宽目标授权或 SSRF 检查。Vendor HTTP client 缓存与 WS 复用身份同时包含 URL、bypass 和 HTTP/1 标志；后续执行采用新快照，在途执行不重新路由，也不承诺立即关闭旧 socket。
 
@@ -506,7 +508,7 @@ Inference Run 在 Request Hook 前验证 API Key、建立 Principal 并计一次
 
 HTTP ingress 与内部 Model Turn 的 extra-header 入口都消费会话／关联 header 别名。`x-session-id`、`session-id`、`session_id` 等按固定优先级归一到 `session.id`；匹配的非空 header 可以覆盖 body 身份。`x-client-request-id`／`x-request-id` 只写 `session.request_id`。这些别名与 Codex 专有 headers 从通用转发集合移除，不能直接送到任意上游；认证、Cookie 和客户端网络身份仍由原有 header 安全策略隔离。
 
-Canonical 请求不保存供应商原生上下文。Model Turn 只把统一 session 身份按 Principal、Target 与根请求作用域派生为 `transport_affinity` 等 operation metadata，插件从这些宿主派生值生成原生会话标识，不读取客户端原始 ID。官方工具私有身份由插件自行维护：Codex `x-codex-installation-id` 是按凭据持久化在插件私有状态中的 UUID，`x-codex-turn-state` 只取自同一 turn 的上游响应头；客户端的 `x-codex-beta-features`、`x-openai-subagent` 与 `x-codex-turn-metadata` 不转发。
+Canonical 请求不保存供应商原生上下文。Model Turn 只把统一 session 身份按 Principal、Target 与根请求作用域派生为 `transport_affinity` 等 operation metadata，插件从这些宿主派生值生成原生会话标识，不读取客户端原始 ID。官方工具私有身份由插件自行维护：Codex installation ID 是按凭据持久化在插件私有状态中的 UUID，只写入请求 body 的 `client_metadata` 与 turn metadata，`x-codex-turn-state` 只取自同一 turn 的上游响应头；客户端的 `x-codex-beta-features`、`x-openai-subagent` 与 `x-codex-turn-metadata` 不转发。
 
 目标 body、会话 headers 及其参数型嵌套对象采用正向白名单，由所属 codec／插件从 canonical 控制重新投影。标准 API 以对应官方协议为边界；OAuth／订阅插件以对应官方工具实际会产出的字段为边界，不能把公共 API 的字段全集当作私有端点支持范围。字段清单依据官方源码、schema 和实际请求核对，已确认的官方字段必须完整建模，新增支持须显式更新 canonical 字段及目标投影。白名单外参数透明丢弃，不转发、不报参数错误，也不触发额外重试；官方声明为任意业务映射的 metadata、工具 schema、工具入参与结果中的对象键不是请求控制，不能按参数清单递归删除。CLI 身份 metadata 等结构化控制不属于任意业务映射，其成员同样受白名单约束。
 
@@ -542,7 +544,7 @@ Gateway::builder(config)
 
 `build()` 校验 HookId 非空且不重复，校验 PlatformTool 的稳定 `ToolId`，然后以 builder 顺序构造一个不可变的 `HookRuntime`。运行时不使用 hook 的进程级隐式发现；Hook 与 PlatformTool 是受信的、进程内 Rust 实现，依赖在构造时注入。
 
-每个客户端推理 turn 只把 `RunInput` 交给 `inference_run::execute`；该一次性 `interface` 独占完整生命周期，并调用 `HookRuntime::begin(SessionContext, &AiRequest, ContextCompleteness)` 创建 crate-private run state 与每个 Hook 的 `HookSession`。一次 Inference Run 覆盖初始 provider round、纯 PlatformTool 隐藏续跑，以及混合工具等待客户端结果后的恢复；普通 provider Target 重试复用本 round 已校验的 canonical 请求。`SessionContext` 只含 request/run ID、RequestKind、ingress、HTTP/WebSocket transport 和脱敏主体；路由确定后事件才收到 model/provider/target/egress。
+每个客户端推理 turn 只把 `RunInput` 交给 `inference_run::execute`；该一次性 `interface` 独占完整生命周期，并调用 `HookRuntime::begin(SessionContext, &AiRequest, ContextCompleteness, processed_input_items)` 创建 crate-private run state 与每个 Hook 的 `HookSession`。已处理位置由宿主从可信执行历史恢复，不接受客户端或 Hook 自报。一次 Inference Run 覆盖初始 provider round、纯 PlatformTool 隐藏续跑，以及混合工具等待客户端结果后的恢复；普通 provider Target 重试复用本 round 已校验的 canonical 请求。`SessionContext` 只含 request/run ID、RequestKind、ingress、HTTP/WebSocket transport 和脱敏主体；路由确定后事件才收到 model/provider/target/egress。
 
 交付准备与收口集中在 `engine/settlement.rs`。`CompletionSettlement` 的私有状态一起持有待提交的 Generation Chain Write 与 Vendor 围栏，完整响应收口按值消费该对象；调用方不再自行配对围栏、交付时间和可选收口字段。buffered 形态还持有 staged Marker 与其执行工作；stream 形态只持有最终响应工作，先前未通过 Marker 交付门的执行不会在最终收口中补启动。`MarkerExecutions` 仅在确有工作时接管所属 Hook run，空执行保留调用方的清理所有权；Marker 发布仍不等于工具执行交接。
 
@@ -587,6 +589,8 @@ Hook 是并发安全的共享工厂；Session 是每次 `InferenceRun` 的可变
 
 `HookEvent` 携带最小稳定 `SessionContext`、`round` 和必要的 canonical 只读 view；`UpstreamResponse`、`ToolResult`、`ClientOutput` 还需要已设置的 `RouteContext`。Embedding 使用 `RequestKind::Embeddings`，可由 descriptor 自然隔离。
 
+`Request.current` 仍可读取完整上下文；内容变换只处理 `current.items[input_start..]`。`input_start` 区分已经处理的执行前缀与尚未处理的输入，不等于客户端 delta：上一轮模型输出首次成为下一轮输入时也必须处理。请求决策仍会执行，历史复用不缓存路由、能力或权限判定。
+
 ### 4.4 动作批次与失败语义
 
 ```rust
@@ -610,13 +614,15 @@ pub enum HookControl {
 
 一个 `ActionBatch` 先整体验证，再原子应用；任一 Patch 非法、hook 返回错误、hook session 创建 panic 或 runtime 状态非法都会 fail-closed。`Respond` 只允许 `Request`；`Reject` 只允许首字节发出前的 Request/UpstreamResponse；首字节后只能 `StreamAbort`，不能改变已经发送的 HTTP 状态。Hook 调用不设默认超时，但必须响应请求取消。
 
-Request Patch 可改写 canonical model、system/instructions、ContextItems、generation、tools/tool choice、embedding input 和 protocol extension，但不得改变主体、认证、provider target 或凭据。Response/ToolResult Patch 不能修改 usage、stop/lifecycle、tool ownership/ID 或结构性 stream 事件；平台工具所有权在核心分类后保持不可变，arguments 可被安全语义 patch 后重新校验。
+Request Patch 可改写 canonical model、system/instructions、ContextItems、generation、tools/tool choice、embedding input 和 protocol extension，但不得改变主体、认证、provider target 或凭据。请求不再提供 `ReplaceCanonical`：新增内容用 `SpliceInput { range, items }`，范围相对于当前未处理输入，越界使整批动作回滚；路由计划用 `SetMediaRouting`，不改写历史。确需修改已有历史时显式使用 `ReplaceContextSpans`。宿主按成功应用的 splice 投影历史 gap，无法证明替换区间内部的来源时不保留该 gap；显式 context rewrite 使原边界证明失效，不能凭内容相等恢复。Response/ToolResult Patch 不能修改 usage、stop/lifecycle、tool ownership/ID 或结构性 stream 事件；平台工具所有权在核心分类后保持不可变，arguments 可被安全语义 patch 后重新校验。
 
 ### 4.5 ContextSnapshot 与状态
 
 `InferenceRun` 仅在存在当前完整性允许执行的 Request 事件订阅者时，在 `begin()` 为原始请求建立 `ContextSnapshot`：有序 `ContextItem`（Message、Reasoning、ToolCall、ToolResult）、稳定请求内 `ContextItemId`、版本化 checkpoint/fingerprint 与 `ReplaceContextSpan`。无此订阅者时不物化大正文 JSON 快照；其他事件只读取独立的完整性状态，PlatformTool 仍通过既有 read scope、主体与取消上下文执行。每次请求独立从客户端提交的上下文匹配，不维护压缩 rollback 状态机；重叠 span、反向 span、未知/重复 item ID 均拒绝。
 
 原始与当前 Snapshot 在未修改时共享同一 `Arc`，流式只读回调不复制完整上下文。Request 动作在暂存状态中原子应用：空批次不复制请求，实际修改才分离请求或上下文；后续动作失败时仍丢弃整批暂存修改。Canonical 普通文本与 Text block 使用 `Arc<String>` 共享底层缓冲区，文本写入采用写时复制；序列化仍为原有字符串，不能因此改变 checkpoint、历史指纹或 Hook 的只读元数据规则。
+
+普通输入 splice 的请求事务暂存只复制未处理部分；纯控制或路由动作的请求暂存不复制历史 items。Generation Chain 从既有 `effective_history_mutation` 与 `effective_output` 恢复处理结果和最后输出前的位置，不另建历史正文缓存。完整客户端历史经严格父发现、显式父 ID 续接和冷启动物化遵守同一规则；客户端编辑不能命中旧前缀时按新的分支输入处理。原生图片只更新路由计划，保留 canonical 历史边界；bridge 只转换新增图片，若路由变化要求转换旧 native 图片则显式改写历史。
 
 Canonical 语义投影将已拥有的 JSON 子树直接移入父对象或数组，不通过 `json!` 再次序列化并复制正文；历史逐项投影与比较不预先物化整段历史。普通 Text 的指纹与比较借用正文，复杂内容和原生字段仍经过既有受控投影；JSON Map 键序、长度前缀、语义单元顺序及缺省/null 等价关系保持不变。Context item 的身份匹配移交已计算的 canonical bytes，span fingerprint 每项只计算一次，仍保留重复项的独立 occurrence 身份。
 
@@ -729,6 +735,8 @@ SQLite 与 PostgreSQL 的 Interaction usage 汇总从该 Interaction 的索引 R
 ADR-0083 起统计独立保存请求终态与上游尝试计数：全局的已终结请求数与失败的请求数按运行终态计算，排除取消、断线与上游发送前被平台校验拒绝的错误请求，即使已创建 Target 尝试记录也不例外；无可用 Target、额度暂停等服务失败仍降低最终成功率。全局与供应商的上游请求数与上游错误数按 Target attempt 计算（上游请求 = 已完成尝试 + 来源为上游的失败尝试，上游错误 = 来源为上游的失败尝试）。本地准备失败、未发送、取消与来源未知的尝试既不进上游分子也不进上游分母。供应商统计只暴露上游请求与上游错误；`request_count` 存储列仍是总览、序列、模型与 API Key 请求数的来源，不对供应商暴露；旧口径 `error_count` 存储列已由 `0036_request_recovery` 回收；上游尝试沿用所属 Model Turn 的起点分桶。
 
 迁移 `0036_request_recovery` 沿用同一 source/checkpoint/delta 链路，为全局请求增加 `recovered_request_count` 与 `recovery_known_request_count`；两者和已终结请求数一样，按 Inference Run 开始时间分桶，每个请求最多贡献一次。恢复成功需要同一 Model Turn 内先失败、后成功的自动重试或切换证据，且所属请求最终成功；普通多轮成功、另一次客户端请求和最终失败不算恢复成功。最终失败的请求可确定没有恢复成功；成功请求缺少完整观察事实且没有恢复证据时保持未知。总览与序列返回两个新增计数，粗化时先分别求和。最终成功率为 `(terminal_request_count - failed_request_count) / terminal_request_count`；只有恢复判定覆盖全部已终结请求时，才显示一次通过率与恢复贡献，分别为 `(terminal_request_count - failed_request_count - recovered_request_count) / terminal_request_count` 和 `recovered_request_count / terminal_request_count`。后者以百分点表达，不与按尝试计算的上游调用成功率相减。
+
+清除历史跨越在途请求时会使其先前的原子会话租约失效；即使响应随后成功交付，旧租约也不能提交 Generation Chain，并可能记录 `atomic_state_unavailable` 观察缺口。此时成功请求及已确认上游和 Token 事实仍计入长期统计，但缺口使没有独立恢复证据的成功请求保持恢复覆盖未知，不能把它计作已知未恢复，也不表示请求统计丢失。
 
 同一迁移把 `0018` 起“整行扣除旧 checkpoint、删除、再插入”的刷新改为差量刷新：来源触发器只对该来源仍产出的行执行 `INSERT … ON CONFLICT DO UPDATE … WHERE` 且仅在指标实际变化时写入，不再产出的行单独删除；checkpoint 的 UPDATE/DELETE 触发器把 `NEW − OLD` 或被撤销的 `OLD` 结转进长期桶。来源行已被保留期清理删除时 reclaim 触发器删除 checkpoint 不扣桶，因此历史总量仍保留。长期桶的结果与整行替换一致，但每个来源每次修订只改写变化的行；恢复覆盖由 writer 刷新 checkpoint，桶随触发器结转，不再由应用层同时写两处。
 
@@ -897,7 +905,13 @@ model_turn/                  ← 路由与尝试策略；只调用 Gateway::exec
 
 ### 6.1 Descriptor 与操作入口
 
-WIT 契约为 `stravia:vendor@0.6.0`，新增独立的 `ConnectionCheck` capability / operation、验证范围和 `InvalidResponse` 错误类型。宿主只接受此明确 ABI 版本，旧 `0.5.x` 独立组件必须重建并重新导入，不保留旧 ABI 准入。手动 HTTP header 驱动行为、无压缩 WebSocket 和显式压缩入口仍共用原有传输与生命周期。`VendorDescriptor` 声明稳定 `vendor_id`、版本、展示元数据、canonical format 版本、`kind`（fallback 或 dedicated）及 `providers`；每个 `ProviderDescriptor` 独立声明 `provider_id`、可选 `catalog_id`、展示元数据、channels、能力、配置字段、网络权限与数据兼容版本。fallback descriptor 的 Vendor 身份必须为 `base`；dedicated descriptor 只能有一个 profile，且其 `provider_id` 必须等于 `vendor_id`。管理面和执行面都从 `VendorPlugins` 当前已安装且已加载的 descriptor 读取，不再聚合协议 registry 伪造插件 inventory。
+WIT 契约为 `stravia:vendor@1.0.0` 和独立的 `stravia:net@1.0.0`。宿主按主版本准入并拒绝高于自身支持的 minor，0.x 独立组件必须重建并重新导入；已发布 WIT 快照保持冻结，细节见 [Vendor Plugin 设计](vendor-plugins.md)。`ConnectionCheck` 为独立操作。`VendorDescriptor` 声明稳定 `vendor_id`、版本、展示元数据、canonical format 版本、`kind`（fallback 或 dedicated）及 `providers`；每个 `ProviderDescriptor` 独立声明 `provider_id`、可选 `catalog_id`、展示元数据、channels、能力、配置字段、网络权限与数据兼容版本。fallback descriptor 的 Vendor 身份必须为 `base`；dedicated descriptor 只能有一个 profile，且其 `provider_id` 必须等于 `vendor_id`。管理面和执行面都从 `VendorPlugins` 当前已安装且已加载的 descriptor 读取，不再聚合协议 registry 伪造插件 inventory。
+
+Vendor 出站使用 rama 与打补丁的 rustls；其他出站消费者仍使用各自的客户端。Cargo 补丁统一由 `patch-crate 0.1.13` 管理：根 `Cargo.toml` 的 `workspace.metadata.patch` 按名称与版本指定目标，补丁保存在 `patches/<crate>+<version>.patch`，生成源码位于 `target/patch/<crate>-<version>`，并由 `patch.crates-io` 引用。仓库不保存生成的第三方源码，也不维护另一套下载、解包或补丁脚本。
+
+直接运行 Cargo 前执行 `task prepare:crates`。它按需安装固定版本的工具；Task 根据清单、锁文件、任务定义、补丁及生成目录判断是否需要运行 `cargo patch-crate --force`。升级补丁无需手动增加目录修订号，但更新 crate 版本时须同步依赖精确版本、metadata、补丁文件名、Cargo path 及 Task 产物路径。修改生成源码后，可用 `cargo patch-crate <crate>@<version>` 导出补丁；生成源码本身不入库。`cargo clean` 会删除生成目录，之后重新准备。需要丢弃手动修改或刷新恢复的缓存时，先停止构建，再运行 `task --force prepare:crates`；不要让刷新与构建并发。准备失败返回非零，不得继续 Cargo 构建。
+
+该版本的 `patch-crate` 没有 `--offline`／`--crate-file`，也不会仅因 `CARGO_NET_OFFLINE=true` 禁止索引刷新。离线环境须预装工具，并通过 Cargo 的目录源替换提供完整 vendor 源，包括根锁文件中已被 path patch 替换的三个原始 crate；只缓存 `.crate` 归档并不足以保证离线准备。Nix 构建使用固定哈希输入和目录源提供这些依赖，不在 sandbox 中下载安装工具。
 
 请求 canonical format 仍为 1；它与 WIT ABI 独立版本化。满足当前 WIT 的 format-1 插件可按兼容读取契约忽略新增且有默认值的 optional 字段；忽略不代表插件支持该新语义。SDK `request_compat.rs` 按目标 family 从唯一 canonical 状态生成旧 `ext`、已知标准字段和 `reasoning.effort` 的 wire 视图，以供兼容读取方使用，不把这些别名恢复成宿主运行时状态，也不把未知 passthrough 提升为上游 body 权限。新增必选语义、破坏读取契约或改变 WIT 仍须版本化，不能以 optional 兼容性绕过。独立插件中的 codec 固化在已安装 WASM 内，须重建并重新导入插件才能获得新 codec／目标投影行为；只升级宿主不会更新旧 WASM。
 
@@ -917,7 +931,7 @@ Wasm guest 不能直接取得宿主网络、存储或任意凭据。host 只提�
 
 - 根据 descriptor 的固定 origin、base URL 字段与显式配置解析最小网络授权；guest 输出不能扩大 origin。
 - HTTP / WebSocket 统一经过 host transport，遵循代理设置、取消、deadline、响应大小与消息大小限制。
-- HTTP 内容编码及 WS `permessage-deflate` 由 guest 的 typed 请求声明、host 协商和编解码，压缩头不接受 guest 手写。连接池保存真实 WS 压缩上下文并按策略隔离；具体编码、协商失败、流式读取及诊断边界见 [Vendor 传输压缩契约](vendor-plugins.md#http-与-websocket-传输压缩)。
+- HTTP 内容编码及 WS `permessage-deflate` 由 guest 的开放网络选项声明，host 负责协商和编解码；请求字段由 guest 提供并按协议校验或填入槽位。连接池保存真实 WS 压缩上下文并按策略隔离；具体行为见 [Vendor Plugin 设计](vendor-plugins.md)。
 - Provider credentials 以 typed snapshot 交给当前操作；私有状态按供应商 profile 身份、已保存 Provider 连接 UUID 和 data epoch 隔离。
 - protocol codec 保持跨厂商通用，只负责 canonical IR 与 wire 表示能力；厂商 URL、headers、认证刷新、模型发现和错误解释留在 guest。
 
@@ -1182,6 +1196,8 @@ WebUI 的全局与单服务入口共用根布局中的一个「模型变更」�
 | Memory | 测试 / mock | `backend/crates/stravia-core/src/storage/memory.rs` |
 
 统一接口定义在 `backend/crates/stravia-core/src/storage/traits.rs`，上层代码不感知具体后端。`stravia-tools dump-schema` 在隔离数据库应用全部迁移后生成 PostgreSQL 与 SQLite 的最终结构，参考产物分别为 [PostgreSQL schema](../database/postgres.sql) 与 [SQLite schema](../database/sqlite.sql)，不包含业务数据或 SQLx 迁移历史。
+
+Bundled SQLite 通过 `.cargo/config.toml` 的 `LIBSQLITE3_FLAGS` 默认设置 `SQLITE_DEFAULT_MEMSTATUS=0`。独立数据库的分配原本也会争用进程级内存统计锁；产品与 SQLx 未使用这些统计及全局 soft/hard heap limit，因此关闭它们，保留线程安全、外键、事务、WAL 同步与各池写协调。此设置不限制测试并发，也不改变页缓存预算；取舍是 SQLite 的全局内存用量、高水位、状态统计及 heap limit 接口默认不可用，不影响进程 RSS 观测。构建产物缓存同时跟踪显式传入的 `LIBSQLITE3_FLAGS`，避免环境覆盖后复用旧二进制。接口边界见 SQLite 的 [编译选项](https://www.sqlite.org/compile.html#default_memstatus) 与 [MEMSTATUS 配置契约](https://www.sqlite.org/c3ref/c_config_covering_index_scan.html#sqliteconfigmemstatus)。
 
 #### 统一派生缓存与 Server 配置
 
@@ -1511,6 +1527,8 @@ Request Records 使用 `/api/v1/observations/interactions`、`/interactions/{id}
 每个有效 API Key 建立的 Principal 按严格滑动 60 秒维护根请求 RPM；Proxy、remote compaction 与 MCP `tools/call` 在认证后、Hook 或工具执行前计一次。根内所有轮次、工具和后台执行共享 RootRequest，每次真实发送另经目的地 RPM。入口超限立即 429 与 `Retry-After`，无入口队列；Target 等待有累计预算与实例队列边界，详见 §8.3–8.4。没有活跃执行并发上限或按执行生命周期释放的名额。
 
 ### 12.3 Fixture 契约测试体系
+
+`tests/e2e/storage/test_tool_executions.py` 通过真实 HTTP 与 SQLite／PostgreSQL 验证持久 handoff。仅 `test-harness` 服务端提供隐藏的 `--test-handoff-barrier <loopback-ip:port>`，Core 实现由 `test-support` 编译门控：默认等待窗口结束后，向控制器发送执行 ID，在收到释放字节前不进入持久提交，随后报告真实提交结果。测试在此处断开请求，并在旧上游与提交屏障都未释放时验证下一请求已被上游受理。普通构建没有该入口；不以数据库全局写锁、修改 busy timeout 或缩短产品窗口模拟交接竞态。
 
 ```
 tests/fixtures/protocol/

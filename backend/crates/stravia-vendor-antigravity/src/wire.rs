@@ -102,6 +102,34 @@ pub(crate) fn infer(
     request.generation.frequency_penalty = None;
     request.parallel_tool_calls = None;
 
+    // The public Gemini codec collapses these levels to HIGH, but CLI master
+    // distinguishes them. Keep its budget/mode precedence and selector behavior.
+    let explicit_extended_level = match request.reasoning.target_control.as_ref() {
+        Some(stravia_runtime_contract::thinking::TargetThinkingControl::Effort { value }) => {
+            match stravia_runtime_contract::thinking::ThinkingLevel::from_wire(value).ok() {
+                Some(stravia_runtime_contract::thinking::ThinkingLevel::Xhigh) => {
+                    Some("EXTRA_HIGH")
+                }
+                Some(stravia_runtime_contract::thinking::ThinkingLevel::Max) => Some("MAX"),
+                _ => None,
+            }
+        }
+        None if request.reasoning.budget_tokens.is_none()
+            && !matches!(
+                request.reasoning.mode.as_deref(),
+                Some("auto" | "disabled" | "enabled")
+            ) =>
+        {
+            match request.reasoning.level {
+                Some(stravia_runtime_contract::thinking::ThinkingLevel::Xhigh) => {
+                    Some("EXTRA_HIGH")
+                }
+                Some(stravia_runtime_contract::thinking::ThinkingLevel::Max) => Some("MAX"),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
     // CLI 使用 private master Schema，不能让公开 Gemini codec 的能力校验
     // 拒绝 strict 或移除已核对的 schema 约束；这些边界由下方显式构造。
     let tools = request.tools.take();
@@ -124,6 +152,22 @@ pub(crate) fn infer(
     let object = body
         .as_object_mut()
         .ok_or_else(|| invalid("Gemini request must be an object"))?;
+    object
+        .entry("generationConfig")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| invalid("generationConfig must be an object"))?
+        .entry("maxOutputTokens")
+        .or_insert_with(|| json!(65536));
+    if let Some(level) = explicit_extended_level
+        && let Some(thinking) = object
+            .get_mut("generationConfig")
+            .and_then(|config| config.get_mut("thinkingConfig"))
+            .and_then(Value::as_object_mut)
+        && thinking.contains_key("thinkingLevel")
+    {
+        thinking.insert("thinkingLevel".into(), json!(level));
+    }
     if let Some(control) = selector_thinking.filter(|_| !has_explicit_thinking_control) {
         let thinking = object
             .entry("generationConfig")
@@ -259,28 +303,40 @@ pub(crate) fn infer(
         request_type: "agent",
         request_id: uuid::Uuid::new_v4(),
     };
-    let headers = client::headers(&provider)?;
+    let mut headers = stravia_vendor_sdk::net::Fields::new();
+    for field in client::headers(&provider)?.into_vec() {
+        if field.name.eq_ignore_ascii_case("content-length") {
+            headers.append("Transfer-Encoding", b"chunked".as_slice());
+        } else {
+            headers.append(field.name, field.bytes);
+        }
+    }
     let bytes = serde_json::to_vec(&envelope)
         .map_err(|_| invalid("Antigravity request could not be encoded"))?;
     host.emit_started()?;
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: "POST".into(),
-        url: format!(
-            "{}?alt=sse",
-            client::endpoint(&provider, "streamGenerateContent")
-        ),
-        headers,
-        body: bytes,
-    })?;
+    let response = client::http_start(
+        host,
+        stravia_vendor_sdk::net::Request {
+            method: "POST".into(),
+            url: format!(
+                "{}?alt=sse",
+                client::endpoint(&provider, "streamGenerateContent")
+            ),
+            headers,
+            body: bytes,
+        },
+    )?;
     let status = response.status()?;
     let headers = response.headers()?;
     if !(200..300).contains(&status) {
         let bytes = read_http_body(&response, MAX_EVENT)?;
         return Err(common::upstream_error(status, &headers, &bytes));
     }
-    let streaming = headers.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case("content-type")
-            && value.to_ascii_lowercase().contains("text/event-stream")
+    let streaming = headers.iter().any(|field| {
+        field.name.eq_ignore_ascii_case("content-type")
+            && String::from_utf8_lossy(&field.bytes)
+                .to_ascii_lowercase()
+                .contains("text/event-stream")
     });
     if !streaming {
         let bytes = read_http_body(&response, MAX_BODY)?;
@@ -345,7 +401,7 @@ fn decode_event(
     accumulator: &mut StreamResponseAccumulator,
     terminal: &mut bool,
     payload: &[u8],
-    headers: &[(String, String)],
+    headers: &stravia_vendor_sdk::net::Fields,
 ) -> Result<(), PluginError> {
     if payload == b"[DONE]" {
         return Ok(());
@@ -412,7 +468,10 @@ pub(crate) fn normalize_final_usage(response: &mut Value) {
         .or_insert_with(|| json!(0));
 }
 
-pub(crate) fn response_error(value: &Value, headers: &[(String, String)]) -> Option<PluginError> {
+pub(crate) fn response_error(
+    value: &Value,
+    headers: &stravia_vendor_sdk::net::Fields,
+) -> Option<PluginError> {
     let error = value
         .get("error")
         .or_else(|| value.pointer("/response/error"))?;
@@ -571,22 +630,45 @@ fn generation(value: &mut Value) -> Result<(), PluginError> {
             thinking,
             &["includeThoughts", "thinkingBudget", "thinkingLevel"],
         )?;
-        // CLI 1.3.2 master 的真实 enum；非法显式值不能静默丢弃。
-        if let Some(level) = thinking.get("thinkingLevel") {
-            let valid = match level {
-                Value::String(value) => matches!(
-                    value.as_str(),
-                    "UNSPECIFIED" | "LOW" | "MEDIUM" | "HIGH" | "MINIMAL" | "EXTRA_HIGH" | "MAX"
-                ),
-                Value::Number(value) => {
-                    value.as_i64().is_some_and(|value| (0..=6).contains(&value))
+        // CLI master enum numbers are catalog metadata; requests use symbolic names.
+        if let Some(level) = thinking.get_mut("thinkingLevel") {
+            let canonical = match &*level {
+                Value::String(value)
+                    if matches!(
+                        value.as_str(),
+                        "UNSPECIFIED"
+                            | "LOW"
+                            | "MEDIUM"
+                            | "HIGH"
+                            | "MINIMAL"
+                            | "EXTRA_HIGH"
+                            | "MAX"
+                    ) =>
+                {
+                    None
                 }
-                _ => false,
+                Value::Number(value) => Some(match value.as_i64() {
+                    Some(0) => "UNSPECIFIED",
+                    Some(1) => "LOW",
+                    Some(2) => "MEDIUM",
+                    Some(3) => "HIGH",
+                    Some(4) => "MINIMAL",
+                    Some(5) => "EXTRA_HIGH",
+                    Some(6) => "MAX",
+                    _ => {
+                        return Err(invalid(
+                            "Antigravity thinkingLevel must be a CLI ThinkingLevel enum",
+                        ));
+                    }
+                }),
+                _ => {
+                    return Err(invalid(
+                        "Antigravity thinkingLevel must be a CLI ThinkingLevel enum",
+                    ));
+                }
             };
-            if !valid {
-                return Err(invalid(
-                    "Antigravity thinkingLevel must be a CLI ThinkingLevel enum",
-                ));
+            if let Some(canonical) = canonical {
+                *level = json!(canonical);
             }
         }
         if thinking.get("thinkingBudget").is_some_and(|value| {
@@ -894,21 +976,21 @@ mod tests {
 
     #[test]
     fn thinking_projection_accepts_cli_enum_and_rejects_invalid_explicit_controls() {
-        for level in [
-            json!("UNSPECIFIED"),
-            json!("LOW"),
-            json!("MEDIUM"),
-            json!("HIGH"),
-            json!("MINIMAL"),
-            json!("EXTRA_HIGH"),
-            json!("MAX"),
-            json!(0),
-            json!(1),
-            json!(2),
-            json!(3),
-            json!(4),
-            json!(5),
-            json!(6),
+        for (level, expected) in [
+            (json!("UNSPECIFIED"), "UNSPECIFIED"),
+            (json!("LOW"), "LOW"),
+            (json!("MEDIUM"), "MEDIUM"),
+            (json!("HIGH"), "HIGH"),
+            (json!("MINIMAL"), "MINIMAL"),
+            (json!("EXTRA_HIGH"), "EXTRA_HIGH"),
+            (json!("MAX"), "MAX"),
+            (json!(0), "UNSPECIFIED"),
+            (json!(1), "LOW"),
+            (json!(2), "MEDIUM"),
+            (json!(3), "HIGH"),
+            (json!(4), "MINIMAL"),
+            (json!(5), "EXTRA_HIGH"),
+            (json!(6), "MAX"),
         ] {
             let mut body = json!({"generationConfig":{"thinkingConfig":{
                 "thinkingLevel":level, "includeThoughts":false
@@ -916,7 +998,7 @@ mod tests {
             sanitize_request(&mut body).unwrap();
             assert_eq!(
                 body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
-                level
+                expected
             );
             assert_eq!(
                 body["generationConfig"]["thinkingConfig"]["includeThoughts"],

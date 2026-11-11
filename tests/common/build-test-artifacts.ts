@@ -1,10 +1,16 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { cpus } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 
 const repository = resolve(import.meta.dir, '../..')
+const preparation = spawnSync('task', ['prepare:crates'], {
+  cwd: repository,
+  stdio: 'inherit',
+})
+if (preparation.error) throw preparation.error
+if (preparation.status !== 0) throw new Error('Failed to prepare patched Cargo crates')
 const cargoTarget = resolve(repository, process.env.CARGO_TARGET_DIR ?? 'target')
 const suffix = process.platform === 'win32' ? '.exe' : ''
 const checking = process.argv[2] === '--status'
@@ -23,7 +29,11 @@ const workspace = [
   '--exclude',
   'stravia-vendor-management-contract-fixture',
   '--exclude',
-  'stravia-vendor-legacy-contract-fixture',
+  'stravia-vendor-manual-contract-fixture',
+  '--exclude',
+  'stravia-vendor-net-1-0-compat-fixture',
+  '--exclude',
+  'stravia-vendor-state-contract-fixture',
   '--features',
   'stravia-server/test-harness',
 ]
@@ -106,6 +116,7 @@ const compilerKeys = [
   'AR',
   'CFLAGS',
   'CXXFLAGS',
+  'LIBSQLITE3_FLAGS',
 ]
 const compilerEnvironment = Object.fromEntries(
   Object.entries({
@@ -131,6 +142,10 @@ const signature = createHash('sha256')
       arch: process.arch,
       cpu: cpus()[0]?.model,
       command: plan.command,
+      patchInputs: [
+        'Cargo.toml', 'Cargo.lock', 'Taskfile.yml', '.cargo/config.toml',
+        ...readdirSync(join(repository, 'patches')).filter((name) => name.endsWith('.patch') && name.includes('+')).sort().map((name) => `patches/${name}`),
+      ].map((path) => [path, readFileSync(join(repository, path)).toString('base64')]),
       environment: compilerEnvironment,
     }),
   )

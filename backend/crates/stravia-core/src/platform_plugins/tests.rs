@@ -274,7 +274,7 @@ async fn hook_and_tool_requests_pin_config_and_survive_disable_and_uninstall() {
     let runtime = crate::hook::HookRuntime::default().with_platform_plugins(Arc::clone(&manager));
     let mut old_request = AiRequest::new("model", Vec::new());
     let mut old_run = runtime
-        .begin(context(), &old_request, ContextCompleteness::Full)
+        .begin(context(), &old_request, ContextCompleteness::Full, 0)
         .unwrap();
     let old_tools = snapshot_tools(&manager.snapshot());
     manager
@@ -289,7 +289,7 @@ async fn hook_and_tool_requests_pin_config_and_survive_disable_and_uninstall() {
         .unwrap();
     let mut new_request = AiRequest::new("model", Vec::new());
     let mut new_run = runtime
-        .begin(context(), &new_request, ContextCompleteness::Full)
+        .begin(context(), &new_request, ContextCompleteness::Full, 0)
         .unwrap();
     manager
         .update(
@@ -303,12 +303,12 @@ async fn hook_and_tool_requests_pin_config_and_survive_disable_and_uninstall() {
         .unwrap();
     let mut disabled_request = AiRequest::new("model", Vec::new());
     let mut disabled_run = runtime
-        .begin(context(), &disabled_request, ContextCompleteness::Full)
+        .begin(context(), &disabled_request, ContextCompleteness::Full, 0)
         .unwrap();
     manager.uninstall(id).await.unwrap();
 
     assert!(matches!(
-        old_run.on_request(&mut old_request).await.unwrap(),
+        old_run.on_request(&mut old_request).await.unwrap().control,
         HookControl::Continue
     ));
     assert_eq!(old_request.instructions.as_deref(), Some("old policy"));
@@ -404,7 +404,7 @@ async fn all_hook_stages_apply_through_the_existing_contract() {
     let runtime = crate::hook::HookRuntime::default().with_platform_plugins(manager);
     let mut request = AiRequest::new("model", Vec::new());
     let mut run = runtime
-        .begin(context(), &request, ContextCompleteness::Full)
+        .begin(context(), &request, ContextCompleteness::Full, 0)
         .unwrap();
     assert!(run.requires_terminal_buffering());
     run.on_request(&mut request).await.unwrap();

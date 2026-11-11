@@ -12,10 +12,10 @@ use stravia_vendor_sdk::{
     AuthCallbackPort, AuthDescriptor, AuthFlow, AuthManualInput, AuthManualInputType, AuthResponse,
     AuthStep, CANONICAL_FORMAT_VERSION, Capability, ChannelDescriptor, ConfigField,
     ConfigFieldKind, ConfigGroup, ConnectionCheckResponse, ConnectionCheckVerification,
-    DataCompatibility, DiscoverResponse, DiscoveredModel, ErrorKind, GuestHost, HttpRequest,
-    ModelAllowance, NetworkDeclaration, Operation, OperationInput, OperationOutput, PluginError,
-    ProviderDescriptor, ProviderSnapshot, VendorDescriptor, VendorGuest, VendorKind,
-    read_http_body,
+    DataCompatibility, DiscoverResponse, DiscoveredModel, ErrorKind, Fields, GuestHost,
+    ModelAllowance, NetworkDeclaration, Operation, OperationInput, OperationOutput, Options,
+    PluginError, ProviderDescriptor, ProviderSnapshot, Request, VendorDescriptor, VendorGuest,
+    VendorKind, read_http_body,
 };
 
 struct ManagementContractVendor;
@@ -122,6 +122,7 @@ impl VendorGuest for ManagementContractVendor {
             authors: vec!["Unverified management fixture author".into()],
             canonical_format_version: CANONICAL_FORMAT_VERSION,
             kind: VendorKind::Dedicated,
+            egress_shapes: Vec::new(),
             providers: vec![ProviderDescriptor {
                 provider_id: profile.vendor_id().into(),
                 catalog_id: None,
@@ -530,7 +531,10 @@ fn post_json<T: serde::Serialize, R: serde::de::DeserializeOwned>(
     authenticated: bool,
 ) -> Result<R, PluginError> {
     let state_before = state_label(host)?;
-    let mut headers = vec![
+    let mut headers: Vec<(String, String)> = vec![
+        ("accept".into(), "application/json".into()),
+        ("accept-encoding".into(), "identity".into()),
+        ("user-agent".into(), "stravia-management-fixture".into()),
         ("content-type".into(), "application/json".into()),
         (
             "x-management-version".into(),
@@ -558,12 +562,21 @@ fn post_json<T: serde::Serialize, R: serde::de::DeserializeOwned>(
             format!("Bearer {}", credential(provider, "access_token")?),
         ));
     }
-    let response = host.http_start(HttpRequest {
-        method: "POST".into(),
-        url: format!("{}{}", provider.base_url.trim_end_matches('/'), path),
-        headers,
-        body: serde_json::to_vec(&body).map_err(invalid)?,
-    })?;
+    let mut fields = Fields::new();
+    for (name, value) in headers {
+        fields.append(name, String::into_bytes(value));
+    }
+    let mut options = Options::new();
+    options.shape("default").map_err(invalid)?;
+    let response = host.http_start(
+        Request {
+            method: "POST".into(),
+            url: format!("{}{}", provider.base_url.trim_end_matches('/'), path),
+            headers: fields,
+            body: serde_json::to_vec(&body).map_err(invalid)?,
+        },
+        &options,
+    )?;
     let status = response.status()?;
     let bytes = read_http_body(&response, 1024 * 1024)?;
     if !(200..300).contains(&status) {

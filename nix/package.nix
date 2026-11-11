@@ -7,18 +7,47 @@
   rustToolchain,
   source,
   autoPatchelfHook,
+  callPackage,
   clang,
   cmake,
   gitMinimal,
   ninja,
   pkg-config,
   python3,
+  symlinkJoin,
 }:
 let
   rootPackage = lib.importJSON (source + "/package.json");
   workspace = builtins.fromTOML (builtins.readFile (source + "/Cargo.toml"));
   toolchain = builtins.fromTOML (builtins.readFile (source + "/rust-toolchain.toml"));
   version = workspace.workspace.package.version;
+
+  patchCrate = callPackage ./patch-crate.nix { };
+  # path patch 的锁文件条目不含 registry checksum；按发布校验和补入原始 crate，
+  # 让 Cargo 目录源解析未打补丁的依赖时也无需访问 registry。
+  patchSources = rustPlatform.importCargoLock {
+    lockFileContents = ''
+      version = 4
+
+      [[package]]
+      name = "rustls"
+      version = "0.23.46"
+      source = "registry+https://github.com/rust-lang/crates.io-index"
+      checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
+
+      [[package]]
+      name = "rama-http-core"
+      version = "0.4.0"
+      source = "registry+https://github.com/rust-lang/crates.io-index"
+      checksum = "bd832563002979754e619537a0d5861b1f1c8dfb505b71c314ccd781b2697324"
+
+      [[package]]
+      name = "rama-http-types"
+      version = "0.4.0"
+      source = "registry+https://github.com/rust-lang/crates.io-index"
+      checksum = "5b09c027c4580a73643571953aa662429d8dab848aac6c45425f3f82b4a8eaa5"
+    '';
+  };
 
   # 用白名单界定源码，避免把开发数据库、凭据和已有产物送入 store。
   cleanSource =
@@ -56,7 +85,7 @@ let
       "bun.lock"
       "frontend"
     ]
-    || inTree "patches" path
+    || (inTree "patches" path && !(lib.hasSuffix ".patch" path && lib.hasInfix "+" (baseNameOf path)))
     || inTree "frontend/stravia-webui" path;
   webSource = cleanSource frontendInput;
   serverSource = cleanSource (
@@ -66,6 +95,7 @@ let
       "Cargo.lock"
       "rust-toolchain.toml"
       "LICENSE"
+      "patches"
       "frontend"
       "frontend/stravia-webui"
       "frontend/stravia-webui/src"
@@ -73,6 +103,7 @@ let
       "frontend/stravia-webui/static"
     ]
     || inTree ".cargo" path
+    || (inTree "patches" path && lib.hasSuffix ".patch" path && lib.hasInfix "+" (baseNameOf path))
     || inTree "backend" path
     || inTree "frontend/stravia-webui/src/assets/icons" path
     || path == "frontend/stravia-webui/static/stravia-logo.svg"
@@ -140,15 +171,23 @@ stdenv.mkDerivation {
   pname = "stravia-server";
   inherit version;
   src = serverSource;
-  cargoDeps = rustPlatform.importCargoLock {
-    lockFile = builtins.path {
-      path = source + "/Cargo.lock";
-      name = "Cargo.lock";
-    };
-    outputHashes = {
-      "tokio-tungstenite-0.28.0" = "sha256-V1xmnrfRWOcZZogelZEA4vvyMj2awCfHVA5/glQ6KAI=";
-      "tungstenite-0.27.0" = "sha256-VVHhk7l9J/sEmG3q/UuV/sQ3f+fGsmq5vumSy8vbMvw=";
-    };
+  cargoDeps = symlinkJoin {
+    # cargoSetupHook 按名称复制目录，须与 importCargoLock 的目录源配置一致。
+    # 主锁文件源必须在前，保留其 Cargo.lock 和包含 Git 依赖的 source 配置。
+    name = "cargo-vendor-dir";
+    paths = [
+      (rustPlatform.importCargoLock {
+        lockFile = builtins.path {
+          path = source + "/Cargo.lock";
+          name = "Cargo.lock";
+        };
+        outputHashes = {
+          "tokio-tungstenite-0.28.0" = "sha256-V1xmnrfRWOcZZogelZEA4vvyMj2awCfHVA5/glQ6KAI=";
+          "tungstenite-0.27.0" = "sha256-VVHhk7l9J/sEmG3q/UuV/sQ3f+fGsmq5vumSy8vbMvw=";
+        };
+      })
+      patchSources
+    ];
   };
   nativeBuildInputs = [
     rustToolchain
@@ -160,6 +199,7 @@ stdenv.mkDerivation {
     ninja
     pkg-config
     python3
+    patchCrate
   ];
   strictDeps = true;
   dontConfigure = true;
@@ -175,6 +215,7 @@ stdenv.mkDerivation {
     export CARGO_BUILD_JOBS="$NIX_BUILD_CORES"
     mkdir -p "$CARGO_HOME" frontend/stravia-webui/dist
     cp -r ${webui}/. frontend/stravia-webui/dist/
+    cargo patch-crate --force
     cargo run --locked --offline -p stravia-vendor-base --bin stravia-build-vendors
     cargo build --locked --offline --release -p stravia-server --bin stravia-server
     runHook postBuild

@@ -51,6 +51,10 @@ pub(super) async fn configure_gateway_extensions(
     )?
     .with_hook_runtime(gateway.hook_runtime.clone())
     .with_platform_plugins(Arc::clone(&gateway.platform_plugins))
+    .with_atomic_state_store(
+        gateway.storage.vendor_plugins().clone(),
+        gateway.storage.prompt_admissions(),
+    )
     .with_tool_authorizer(Arc::new(GatewayAgentToolAuthorizer {
         storage: Arc::clone(&gateway.storage),
     }))

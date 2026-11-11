@@ -56,6 +56,8 @@ use crate::model_turn::support::ai_response_to_deltas as canonical_ai_response_t
 use crate::proxy::context::RequestContext;
 use crate::proxy::security::{ClientCredential, Security};
 use stravia_protocol_codec::accumulator::StreamResponseAccumulator;
+use stravia_protocol_codec::codec::compaction;
+use stravia_protocol_codec::transform::ProtocolTransform;
 use stravia_runtime_contract::model_turn::CanonicalEvent;
 use stravia_runtime_contract::protocol::ids::ProtocolId;
 use stravia_runtime_contract::protocol::ir::AiRequest;
@@ -120,19 +122,16 @@ fn reject_before_admission(
     response
 }
 
-/// Standalone compaction answer in the ingress protocol, whatever protocol the upstream
-/// spoke. A matching upstream body is relayed verbatim; a foreign one is translated so the
-/// client only ever sees its own wire format.
+/// Standalone compaction output is an IR response encoded by the ordinary
+/// ingress codec. The V2 client sees one native compaction item and a normal
+/// completed response; no `response.compaction` resource or retained window.
 fn compaction_response(
     ingress: ProtocolId,
-    wire: &serde_json::Value,
-    model: &str,
-    stream: bool,
+    request: &AiRequest,
+    response: stravia_runtime_contract::protocol::ir::NativeCompactionResponse,
 ) -> Response {
-    let wire = match stravia_protocol_codec::codec::compaction::client_compaction_wire(
-        ingress, wire, model,
-    ) {
-        Ok(wire) => wire,
+    let canonical = match compaction::compaction_response_ir(response, &request.model) {
+        Ok(canonical) => canonical,
         Err(error) => {
             return coded_error_response(
                 StatusCode::BAD_GATEWAY,
@@ -141,25 +140,48 @@ fn compaction_response(
             );
         }
     };
-    if !stream || ingress != stravia_runtime_contract::protocol::ids::ANTHROPIC_MESSAGES_2023_06_01
-    {
-        return axum::Json(wire).into_response();
-    }
-    // Anthropic delivers a compaction block whole, so the unary upstream result streams
-    // exactly like a native one.
-    let body: String =
-        stravia_protocol_codec::codec::compaction::anthropic_compaction_events(&wire)
+    if ingress == stravia_runtime_contract::protocol::ids::ANTHROPIC_MESSAGES_2023_06_01 {
+        let pair = match ProtocolTransform::global().bind(ingress, ingress) {
+            Ok(pair) => pair,
+            Err(error) => {
+                return coded_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid_compaction_response",
+                    &error.to_string(),
+                );
+            }
+        };
+        let encoded = match pair.encode_response(&canonical) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                return coded_error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "invalid_compaction_response",
+                    &error.to_string(),
+                );
+            }
+        };
+        if !request.stream.enabled {
+            return axum::Json(encoded).into_response();
+        }
+        let body: String = compaction::anthropic_compaction_events(&encoded)
             .into_iter()
             .map(|(event, data)| format!("event: {event}\ndata: {data}\n\n"))
             .collect();
-    (
-        [
-            (axum::http::header::CONTENT_TYPE, "text/event-stream"),
-            (axum::http::header::CACHE_CONTROL, "no-cache"),
-        ],
-        body,
-    )
-        .into_response()
+        return (
+            [
+                (axum::http::header::CONTENT_TYPE, "text/event-stream"),
+                (axum::http::header::CACHE_CONTROL, "no-cache"),
+            ],
+            body,
+        )
+            .into_response();
+    }
+    let mut delivery = DeliveryAdapter::buffered_stream(ingress, Some(ingress));
+    delivery.set_response_profile(request, None);
+    delivery
+        .deliver_canonical(&canonical, StatusCode::OK)
+        .response
 }
 
 fn ai_response_to_deltas(
@@ -270,6 +292,7 @@ pub(super) struct GenerationChainRun {
     previous_response_id: Option<String>,
     compaction_source_generation_id: Option<String>,
     vendor_publications: Vec<crate::plugin::VendorPublicationFence>,
+    initial_history_boundary: Option<HistoryBoundaryInput>,
 }
 
 struct DispatchContext<'a> {
@@ -286,6 +309,33 @@ struct DispatchContext<'a> {
     ledger: &'a RunLedger,
 }
 
+#[derive(Clone)]
+struct HistoryBoundaryInput {
+    source: Arc<AiRequest>,
+    gaps: Vec<usize>,
+    candidate: crate::generation_chain::HistoryBoundaryCandidate,
+}
+
+impl HistoryBoundaryInput {
+    fn after_hook(
+        self,
+        request: &Arc<AiRequest>,
+        outcome: &crate::hook::RequestHookOutcome,
+    ) -> Option<Self> {
+        if outcome.preserves_history() {
+            return Some(self);
+        }
+        let gap = *self
+            .gaps
+            .get(usize::try_from(self.candidate.source_item_gap).ok()?)?;
+        Some(Self {
+            candidate: outcome.project_boundary(&self.candidate, request, gap)?,
+            source: Arc::clone(request),
+            gaps: (0..=request.items.len()).collect(),
+        })
+    }
+}
+
 struct SharedModelTurnInput<'a> {
     executor: Arc<dyn ModelTurnExecutor>,
     gateway: &'a Gateway,
@@ -298,6 +348,7 @@ struct SharedModelTurnInput<'a> {
     headers: &'a HeaderMap,
     projection: &'a mut Option<ClientProjectionSession>,
     ledger: &'a RunLedger,
+    history_boundary: Option<HistoryBoundaryInput>,
 }
 
 fn stabilize_media_generation_chain(
@@ -466,8 +517,26 @@ pub(super) async fn orchestrate(
         api_key_id: Some(principal.api_key_id().to_owned()),
         label: Some(api_key_name.clone()),
     });
-    let compact = ctx.extensions.get::<crate::model_turn::ModelTurnPurpose>()
-        == Some(crate::model_turn::ModelTurnPurpose::Compact);
+    let compact = compaction::standalone_compaction_requested(&request);
+    let compact_history_epoch = if compact {
+        match gw.storage.prompt_admissions().history_epoch().await {
+            Ok(epoch) => Some(epoch),
+            Err(error) => {
+                return reject_before_admission(
+                    &mut Some(ingress_observer),
+                    "admission",
+                    "atomic_state_unavailable",
+                    coded_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "atomic_state_unavailable",
+                        &error.to_string(),
+                    ),
+                );
+            }
+        }
+    } else {
+        None
+    };
     let mut generation_chain_write = if !compact
         && matches!(
             request_kind,
@@ -535,6 +604,8 @@ pub(super) async fn orchestrate(
         compact_has_new_user,
         compact_pending_tool_result,
         compact_parent_target,
+        compact_prepared,
+        compact_atomic_parent_checkpoint_id,
         mut discovery_workspace,
     ) = if compact {
         let prepare = tokio::select! {
@@ -557,7 +628,7 @@ pub(super) async fn orchestrate(
                 );
             }
         };
-        let prepared = match prepare {
+        let mut prepared = match prepare {
             Ok(prepared) => prepared,
             Err(error) => {
                 let code = error.to_string();
@@ -569,14 +640,18 @@ pub(super) async fn orchestrate(
                 );
             }
         };
-        request = prepared.request;
+        request = Arc::clone(&prepared.request);
+        let workspace = prepared.discovery_workspace.take();
+        let atomic_parent_checkpoint_id = prepared.atomic_parent_checkpoint_id;
         (
-            prepared.parent_id,
-            prepared.root_id,
+            prepared.parent_id.clone(),
+            prepared.root_id.clone(),
             Some(prepared.has_new_user),
             prepared.has_matching_pending_tool_result,
-            prepared.parent_target,
-            prepared.discovery_workspace,
+            prepared.parent_target.clone(),
+            Some(prepared),
+            atomic_parent_checkpoint_id,
+            workspace,
         )
     } else {
         (
@@ -585,6 +660,8 @@ pub(super) async fn orchestrate(
             None,
             false,
             crate::router::GenerationParentTarget::Unresolved,
+            None,
+            None,
             generation_chain_write
                 .as_mut()
                 .and_then(|write| write.take_discovery_workspace()),
@@ -632,6 +709,7 @@ pub(super) async fn orchestrate(
     // Generation write's later model legs or upstream stream lifetime.
     drop(discovery_workspace);
     let execution_window = ctx.deadline.remaining();
+    let mut history_boundary_gaps = (0..=request.items.len()).collect::<Vec<_>>();
     if crate::history_marker::request_needs_marker_resolution(&request) {
         match crate::history_marker::resolve_request_markers(
             gw.history_markers.as_ref(),
@@ -640,7 +718,7 @@ pub(super) async fn orchestrate(
         )
         .await
         {
-            Ok(_) => (),
+            Ok(resolution) => history_boundary_gaps = resolution.source_item_gaps,
             Err(error) => {
                 let response = coded_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -694,6 +772,20 @@ pub(super) async fn orchestrate(
             "admission",
             "rpm_limit",
             response,
+        );
+    }
+    if let Some(write) = generation_chain_write.as_mut()
+        && let Err(error) = write.admit_user_prompt().await
+    {
+        return reject_before_admission(
+            &mut Some(ingress_observer),
+            "admission",
+            "user_prompt_admission_unavailable",
+            coded_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "user_prompt_admission_unavailable",
+                &error.to_string(),
+            ),
         );
     }
     ctx.extensions.insert(crate::rpm::current_root_request());
@@ -842,11 +934,64 @@ pub(super) async fn orchestrate(
     );
     ctx.extensions.insert(ledger.clone());
     if compact {
-        let mut turn_input = TurnInput::new(principal.clone(), request)
+        let atomic_principal = principal.continuation_key();
+        let atomic_admission_id = uuid::Uuid::new_v4();
+        let atomic_created_at_ms = chrono::Utc::now().timestamp_millis();
+        let admissions = gw.storage.prompt_admissions();
+        let _memory_guard = match admissions.memory_history_lock() {
+            Some(lock) => Some(lock.read_owned().await),
+            None => None,
+        };
+        let epoch = compact_history_epoch.expect("standalone compact epoch");
+        match admissions.history_epoch().await {
+            Ok(current) if current == epoch => {}
+            Ok(_) => {
+                return coded_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "atomic_state_unavailable",
+                    "History changed during compaction admission",
+                );
+            }
+            Err(error) => {
+                return coded_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "atomic_state_unavailable",
+                    &error.to_string(),
+                );
+            }
+        }
+        let atomic_guard = match crate::plugin::atomic_lease::AtomicLeaseGuard::fork_at_epoch(
+            gw.storage.vendor_plugins().clone(),
+            atomic_principal.clone(),
+            atomic_admission_id,
+            compact_atomic_parent_checkpoint_id,
+            epoch,
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(error) => {
+                return coded_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "atomic_state_unavailable",
+                    &error.to_string(),
+                );
+            }
+        };
+        drop(_memory_guard);
+        ctx.cancellation.cancel_with(&atomic_guard.cancellation());
+        let mut turn_input = TurnInput::new(principal.clone(), Arc::clone(&request))
             .with_execution(ctx.cancellation.clone(), ctx.deadline.clone())
             .with_observer(observer.clone())
             .with_extra_headers(forwarded_client_headers(&headers));
         turn_input.purpose = crate::model_turn::ModelTurnPurpose::Compact;
+        turn_input.atomic_conversation =
+            Some(crate::plugin::execution::AtomicConversationContext {
+                principal: atomic_principal,
+                admission_id: atomic_admission_id,
+                atomic_lease_id: atomic_guard.lease_id(),
+            });
+        turn_input.atomic_lease = Some(atomic_guard);
         turn_input.root_request = ctx
             .extensions
             .get::<crate::rpm::RootRequest>()
@@ -854,6 +999,22 @@ pub(super) async fn orchestrate(
         turn_input.compaction_records = compaction_records.clone();
         turn_input.compaction_source_generation_id = compaction_source_generation_id;
         turn_input.generation_root_id = generation_root_id;
+        if let Some(metadata) = compact_prepared.as_ref().and_then(|prepared| {
+            prepared.user_prompt_metadata_for_admission(atomic_admission_id, atomic_created_at_ms)
+        }) {
+            apply_user_prompt_metadata(&mut turn_input, metadata);
+        }
+        if let Some(prepared) = compact_prepared.as_ref() {
+            if let Some(logical_turn) =
+                prepared.logical_turn_for_admission(atomic_admission_id, atomic_created_at_ms)
+            {
+                turn_input.logical_turn_id = Some(logical_turn.id);
+                turn_input.logical_turn_started_at_ms = Some(logical_turn.created_at_ms);
+            }
+            let window = prepared.source_window_for_admission(uuid::Uuid::new_v4());
+            turn_input.context_window_id = Some(window.id);
+            turn_input.context_window_index = Some(window.index);
+        }
         turn_input.generation_parent_target = compact_parent_target;
         let mut turn = match executor.execute(turn_input).await {
             Ok(turn) => turn,
@@ -862,12 +1023,9 @@ pub(super) async fn orchestrate(
             }
         };
         let response = match turn.output.next().await {
-            Some(Ok(CanonicalEvent::Compacted(response))) => compaction_response(
-                ingress,
-                &response.wire,
-                &client_request.model,
-                client_request.stream.enabled,
-            ),
+            Some(Ok(CanonicalEvent::Compacted(response))) => {
+                compaction_response(ingress, request.as_ref(), *response)
+            }
             Some(Err(error)) => {
                 return model_turn_error_response(error);
             }
@@ -882,6 +1040,20 @@ pub(super) async fn orchestrate(
         phase.finish();
         return response;
     }
+    let processed_source_items = generation_chain_write.as_ref().map_or(
+        0,
+        crate::generation_chain::GenerationChainWrite::processed_input_items,
+    );
+    let Some(&processed_input_items) = history_boundary_gaps.get(processed_source_items) else {
+        return hook_failure_response("processed history cannot be projected into the request");
+    };
+    let initial_history_boundary = generation_chain_write.as_ref().and_then(|write| {
+        Some(HistoryBoundaryInput {
+            source: write.request_snapshot(),
+            gaps: history_boundary_gaps,
+            candidate: write.history_boundary_candidate()?,
+        })
+    });
     let mut generation = GenerationChainRun {
         principal: principal.clone(),
         write: generation_chain_write,
@@ -889,6 +1061,7 @@ pub(super) async fn orchestrate(
         previous_response_id: previous_response_id.clone(),
         compaction_source_generation_id,
         vendor_publications: Vec::new(),
+        initial_history_boundary,
     };
     let session_context = stravia_runtime_contract::hook::SessionContext {
         tools_fixed: false,
@@ -908,6 +1081,7 @@ pub(super) async fn orchestrate(
             session_context,
             &request,
             stravia_runtime_contract::hook::ContextCompleteness::from_request(&request),
+            processed_input_items,
         ) {
             Ok(run) => run,
             Err(error) => return hook_failure_response(error),
@@ -1035,12 +1209,19 @@ async fn dispatch_round(
     if ctx.cancellation.is_cancelled() {
         return error_response(499, "request cancelled");
     }
+    let mut history_boundary = generation_chain.initial_history_boundary.take();
     if request_hook_pending {
         let request_hook_result = inference_run
             .as_mut()
             .expect("buffered Inference Run")
-            .on_request(Arc::make_mut(request))
+            .on_request_with_provenance(Arc::make_mut(request))
             .await;
+        let request_hook_result = request_hook_result.map(|outcome| {
+            history_boundary = history_boundary
+                .take()
+                .and_then(|boundary| boundary.after_hook(request, &outcome));
+            outcome.control
+        });
         match request_hook_result {
             Ok(stravia_runtime_contract::hook::HookControl::Continue) => {}
             Ok(stravia_runtime_contract::hook::HookControl::Respond(response)) => {
@@ -1166,10 +1347,26 @@ async fn dispatch_round(
         headers: &headers,
         projection,
         ledger,
+        history_boundary,
     })
     .await;
     *delivery_state = outcome.delivery;
     *outcome.response
+}
+
+fn apply_user_prompt_metadata(
+    input: &mut TurnInput,
+    metadata: crate::generation_chain::UserPromptMetadata,
+) {
+    input.user_prompt_index = Some(metadata.user_prompt_index);
+    input.user_turn_index = metadata.user_turn_index;
+    input.dialogue_prompt_index = metadata.dialogue_prompt_index;
+    input.context_window_id = metadata.context_window_id;
+    input.context_window_index = metadata.context_window_index;
+    input.user_prompt_id = Some(metadata.user_prompt_id);
+    input.user_prompt_created_at_ms = Some(metadata.user_prompt_created_at_ms);
+    input.client_conversation_id = Some(metadata.client_conversation_id);
+    input.client_conversation_created_at_ms = Some(metadata.client_conversation_created_at_ms);
 }
 
 async fn acquire_turn(
@@ -1179,6 +1376,7 @@ async fn acquire_turn(
     request_context: &RequestContext,
     ledger: &RunLedger,
     generation: &mut GenerationChainRun,
+    history_boundary: Option<HistoryBoundaryInput>,
 ) -> Result<ModelTurn, RoundOutcome> {
     let make_input = |effective_request: Arc<AiRequest>| {
         let mut input = TurnInput::new(generation.principal.clone(), effective_request)
@@ -1193,6 +1391,11 @@ async fn acquire_turn(
                     .expect("admitted Inference Run observer"),
             )
             .with_extra_headers(forwarded_client_headers(headers));
+        if let Some(boundary) = &history_boundary {
+            input.history_boundary_source = Some(Arc::clone(&boundary.source));
+            input.history_boundary_gaps = Some(boundary.gaps.clone());
+            input.history_boundary_candidate = Some(boundary.candidate.clone());
+        }
         input.compaction_records = ledger.compaction_records.clone();
         input.root_request = request_context
             .extensions
@@ -1207,6 +1410,40 @@ async fn acquire_turn(
             .write
             .as_ref()
             .map(|write| write.root_id().to_owned());
+        input.atomic_conversation = generation
+            .write
+            .as_ref()
+            .and_then(|write| write.atomic_conversation_context());
+        input.atomic_lease = generation
+            .write
+            .as_ref()
+            .and_then(|write| write.atomic_lease());
+        if let Some(lease) = &input.atomic_lease {
+            input.cancellation.cancel_with(&lease.cancellation());
+        }
+        if let Some(metadata) = generation
+            .write
+            .as_ref()
+            .and_then(|write| write.user_prompt_metadata())
+        {
+            apply_user_prompt_metadata(&mut input, metadata);
+        }
+        if let Some(turn) = generation
+            .write
+            .as_ref()
+            .and_then(|write| write.logical_turn())
+        {
+            input.logical_turn_id = Some(turn.id);
+            input.logical_turn_started_at_ms = Some(turn.created_at_ms);
+        }
+        if let Some(window) = generation
+            .write
+            .as_ref()
+            .and_then(|write| write.virtual_window())
+        {
+            input.context_window_id = Some(window.id);
+            input.context_window_index = Some(window.index);
+        }
         input
     };
 
@@ -1248,6 +1485,7 @@ async fn execute_shared_model_turn(input: SharedModelTurnInput<'_>) -> RoundOutc
         headers,
         projection,
         ledger,
+        history_boundary,
     } = input;
     let turn = match acquire_turn(
         executor.as_ref(),
@@ -1256,6 +1494,7 @@ async fn execute_shared_model_turn(input: SharedModelTurnInput<'_>) -> RoundOutc
         request_context,
         ledger,
         &mut generation,
+        history_boundary,
     )
     .await
     {

@@ -3,41 +3,43 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="frontend/stravia-webui/static/stravia-logo-reversed.svg">
   <source media="(prefers-color-scheme: light)" srcset="frontend/stravia-webui/static/stravia-logo.svg">
-  <img alt="Stravia" src="frontend/stravia-webui/static/stravia-logo.svg" width="96">
+  <img alt="Strinova" src="frontend/stravia-webui/static/stravia-logo.svg" width="96">
 </picture>
 
-<h1>Stravia</h1>
+<h1>Strinova</h1>
 
 **本地 Agent 基础设施 —— 一个端点接入所有 AI 客户端。**<br>
 统一模型接入、替你运行的工具，以及共享的访问控制、<br>
 历史与用量 —— 桌面应用或单一二进制。
 
-[![Release](https://img.shields.io/github/v/release/Stravia-AI/StraviaPlatform)](https://github.com/Stravia-AI/StraviaPlatform/releases)
+[![Upstream release](https://img.shields.io/github/v/release/Stravia-AI/StraviaPlatform)](https://github.com/Stravia-AI/StraviaPlatform/releases)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
-[![CI](https://github.com/Stravia-AI/StraviaPlatform/actions/workflows/ci.yml/badge.svg)](https://github.com/Stravia-AI/StraviaPlatform/actions/workflows/ci.yml)
+[![CI](https://github.com/MelodyAstro/Strinova/actions/workflows/px-native-linux.yml/badge.svg)](https://github.com/MelodyAstro/Strinova/actions/workflows/px-native-linux.yml)
 [![Rust](https://img.shields.io/badge/rust-toolchain-orange)](rust-toolchain.toml)
 
 [发布版本](https://github.com/Stravia-AI/StraviaPlatform/releases) · [更新日志](CHANGELOG.md) · [English](README.md)
 
 </div>
 
-> **Stravia-PX：** 此改版提供按 API Key 设置的请求模型映射、限时请求识别及 Claude/Codex 兼容补丁。配置与原生升级说明见 [改版维护文档](px/README.md)。
+> **来源与许可：** Strinova 基于 Stravia-AI 的 [StraviaPlatform](https://github.com/Stravia-AI/StraviaPlatform) 改版，当前合入上游 **v0.6.5**。原作者保留版权，本项目继续遵循 [AGPL-3.0-only](LICENSE)；改版仓库为 [MelodyAstro/Strinova](https://github.com/MelodyAstro/Strinova)。
+
+> **Strinova：** 此改版提供按 API Key 设置的请求模型映射、限时请求识别及 Claude/Codex 兼容补丁。配置与原生升级说明见 [改版维护文档](px/README.md)。
 
 ![请求记录 —— 实时追踪每个客户端请求](docs/assets/request-records.png)
 
-> **项目状态：** Stravia 尚未发布 1.0，仍在积极开发中。稳定版发布前，配置格式和数据库兼容性可能发生变化。
+> **项目状态：** Strinova 尚未发布 1.0，仍在积极开发中。稳定版发布前，配置格式和数据库兼容性可能发生变化。
 
 ## 项目简介
 
-Stravia 是本地运行、可自托管的 **Agent infra（智能体基础设施）**，面向使用 AI 编程客户端或构建智能体应用的开发者。客户端不需要改协议 —— OpenAI、Anthropic、Gemini 照旧 —— 只要把地址指向 Stravia。Stravia 决定由哪个上游服务回答，并在需要时完成协议转换。
+Strinova 是本地运行、可自托管的 **Agent infra（智能体基础设施）**，面向使用 AI 编程客户端或构建智能体应用的开发者。客户端不需要改协议 —— OpenAI、Anthropic、Gemini 照旧 —— 只要把地址指向 Strinova。Strinova 决定由哪个上游服务回答，并在需要时完成协议转换。
 
-在模型接入之上，平台自己运行工具：内置联网搜索与多模态理解在 Stravia 内执行，结果直接送回模型 —— 通过普通模型请求或 MCP 提供，客户端不用装插件。访问控制、请求记录、用量与诊断都在同一个地方。
+在模型接入之上，平台自己运行工具：内置联网搜索与多模态理解在 Strinova 内执行，结果直接送回模型 —— 通过普通模型请求或 MCP 提供，客户端不用装插件。访问控制、请求记录、用量与诊断都在同一个地方。
 
 ```text
 Claude Code · Codex CLI · Gemini CLI · OpenCode · 各类 SDK
                             │
                             ▼
-              Stravia 统一监听端口 :23471
+              Strinova 统一监听端口 :23471
                 ├─ OpenAI 兼容 API
                 ├─ Anthropic Messages API
                 ├─ Gemini GenerateContent API
@@ -50,31 +52,22 @@ Claude Code · Codex CLI · Gemini CLI · OpenCode · 各类 SDK
  OpenAI · Anthropic · Google · Vertex AI · DeepSeek · Ollama · …
 ```
 
-Agent 行为由平台实现定义并进行版本管理 —— Stravia 不是用户自定义 Agent 或可视化工作流构建器。
+Agent 行为由平台实现定义并进行版本管理 —— Strinova 不是用户自定义 Agent 或可视化工作流构建器。
 
-## 为什么选择 Stravia
+## 为什么选择 Strinova
 
-- **AI 编程客户端的即插即用端点** —— 把 Claude Code、Codex CLI、Gemini CLI 或 OpenCode 指向 `127.0.0.1:23471` 就能继续工作。客户端协议不变，协议转换、选路和故障切换由 Stravia 处理。
-- **工具替你跑** —— 内置联网搜索（本地搜索使用已安装的 Chrome/Chromium 浏览器；容器已内置 Chromium）与图片理解在 Stravia 内执行，结果直接送回模型。可通过 MCP 提供，也可自动加入兼容请求。
+- **AI 编程客户端的即插即用端点** —— 把 Claude Code、Codex CLI、Gemini CLI 或 OpenCode 指向 `127.0.0.1:23471` 就能继续工作。客户端协议不变，协议转换、选路和故障切换由 Strinova 处理。
+- **工具替你跑** —— 内置联网搜索（本地搜索使用已安装的 Chrome/Chromium 浏览器；容器已内置 Chromium）与图片理解在 Strinova 内执行，结果直接送回模型。可通过 MCP 提供，也可自动加入兼容请求。
 - **密钥、花费和请求记录都在一处** —— 每个应用一把 Key，各自设置可用模型与每分钟请求数（RPM）上限；看到服务商上报的真实用量；实时查看每个请求，出问题时下载完整调试包。
 - **本地优先，一个 Rust 内核** —— 桌面应用或无头服务端二进制；默认 SQLite，团队可用 PostgreSQL；文件存本地或 S3。不依赖云。
 
 ## 快速开始
 
-**桌面应用** —— 从 [GitHub Releases](https://github.com/Stravia-AI/StraviaPlatform/releases) 下载 Windows（NSIS）、Linux（AppImage）或 macOS（DMG，Intel / Apple Silicon）安装包，完整平台在本地启动并自带集成管理界面。macOS 构建使用 Ad-hoc 签名，未经过 Apple 公证，Gatekeeper 可能阻止首次启动。详见[发布与签名说明](docs/releasing.md#macos-构建与独立验证)。
+**上游桌面应用** —— 从 [GitHub Releases](https://github.com/Stravia-AI/StraviaPlatform/releases) 下载 Windows（NSIS）、Linux（AppImage）或 macOS（DMG，Intel / Apple Silicon）安装包，完整平台在本地启动并自带集成管理界面。macOS 构建使用 Ad-hoc 签名，未经过 Apple 公证，Gatekeeper 可能阻止首次启动。详见[发布与签名说明](docs/releasing.md#macos-构建与独立验证)。
 
 启动遇到问题时，桌面应用会提供诊断信息和恢复入口；不会自动重置数据库。
 
-**服务端** —— 一个容器：
-
-```bash
-docker run --rm \
-  --publish 127.0.0.1:23471:23471 \
-  --mount source=stravia-data,target=/data \
-  ghcr.io/stravia-ai/straviaplatform:latest
-```
-
-也可从 Releases 下载对应平台压缩包（请先对照 `SHA256SUMS` 校验）。
+**服务端** —— 使用 [Strinova CI](https://github.com/MelodyAstro/Strinova/actions/workflows/px-native-linux.yml) 构建的原生 GNU 包，无需 Docker。安装前校验 manifest 与 SHA256；见[原生部署与升级](px/README.md)。
 
 **Nix / NixOS（仅 Linux Server）：** 在仓库根目录运行 `nix build .#stravia-server`，或导入 `nixosModules.default` 并启用 `services.stravia`。见 [Nix 部署说明](docs/design/architecture.md#nix-server-与-nixos-服务)。
 
@@ -83,9 +76,9 @@ docker run --rm \
 **首次启动（两种形态相同）：**
 
 1. 打开 <http://127.0.0.1:23471/setup>，输入控制台打印的一次性设置令牌。选择 SQLite 或 PostgreSQL，创建管理员。选择 PostgreSQL 必须在首次设置前配置 Redis，见[缓存与 Server 配置](docs/design/architecture.md#统一派生缓存与-server-配置)。
-2. **添加提供商** —— API Key 或 OAuth 通道（Codex、Claude 订阅、Grok device flow、Devin）。Stravia 会同步可用模型清单。
+2. **添加提供商** —— API Key 或 OAuth 通道（Codex、Claude 订阅、Grok device flow、Devin）。Strinova 会同步可用模型清单。
 3. **添加模型** —— 选择文字或图片输出用途，再选择匹配的上游模型；Model ID 即客户端调用的路由。
-4. **创建 API Key**，然后打开**接入客户端** —— Stravia 为 Claude Code、Codex CLI、Gemini CLI 或 OpenCode 生成可直接应用的 provider 补丁；桌面端可直接写入客户端配置。
+4. **创建 API Key**，然后打开**接入客户端** —— Strinova 为 Claude Code、Codex CLI、Gemini CLI 或 OpenCode 生成可直接应用的 provider 补丁；桌面端可直接写入客户端配置。
 
 之后即可通过任意受支持协议调用：
 
@@ -117,13 +110,13 @@ OpenAI（含 Codex OAuth）· Anthropic（API Key；Claude Pro/Max 订阅 OAuth 
 
 客户端调用你定义的 **Model ID** —— 可以绑定一个或多个上游并按优先级分层：请求先走最高层，同层按流量均衡或延迟偏好选择，同一会话尽量留在已成功的目标上。内置目录让各服务商的模型清单保持最新。
 
-上游服务暂时不可用时，Stravia 会按路由配置重试或切换服务；你可以在管理界面查看各目标的可用状态。
+上游服务暂时不可用时，Strinova 会按路由配置重试或切换服务；你可以在管理界面查看各目标的可用状态。
 
 ![编辑模型 —— 上游目标按优先级分层](docs/assets/model-routing.png)
 
 ### 平台工具与内置 Agent 运行时
 
-- `StraviaRead` —— 一个工具、一个 `path`：读文件、网页、`search://` 问题和图片，Office 文档（DOCX/XLSX/PPTX/DOC/XLS/PPT）读取为提取的 Markdown，长结果自动分页续读。
+- `StrinovaRead` —— 一个工具、一个 `path` 加纯文本 `question`：读文件、网页、研究问题和图片，无需 URL 编码，Office 文档（DOCX/XLSX/PPTX/DOC/XLS/PPT）读取为提取的 Markdown，长结果自动分页续读。
 - **联网搜索** —— 可使用 Local Agent 循环配合需要浏览器的 Local 来源、Exa 或智谱来源，也可绑定由 Vendor 插件返回完整引用报告的 External Route。
 - **多模态理解** —— 用你选的视觉模型描述 JPEG/PNG/WebP 图片、提取文字，或回答 Office 文档相关问题。
 - **媒体生成** —— 通过由具备能力的 Vendor 插件支持的已保存 Route 生成或编辑图片，再用 Artifact Reference 在后续工具中复用。
@@ -137,7 +130,7 @@ OpenAI（含 Codex OAuth）· Anthropic（API Key；Claude Pro/Max 订阅 OAuth 
 
 ### 供应商插件
 
-所有模型 Vendor 均作为自包含 Wasm Component 执行。Stravia 默认内嵌基础 Vendor；Codex、Claude Code、Grok、Command Code 和 Devin 通过独立 Release 附件分发专属插件。添加连接前，先在**供应商插件**中导入对应的本地 `.wasm` 文件。专属插件完整拥有对应供应商身份，任何情况下都不会回退到基础包。
+所有模型 Vendor 均作为自包含 Wasm Component 执行。Strinova 默认内嵌基础 Vendor；Codex、Claude Code、Grok、Command Code 和 Devin 通过独立 Release 附件分发专属插件。添加连接前，先在**供应商插件**中导入对应的本地 `.wasm` 文件。专属插件完整拥有对应供应商身份，任何情况下都不会回退到基础包。
 
 **供应商插件**也支持导入本地包更新，不依赖插件市场。插件会获得所选连接的上游凭据和已批准网络目标，因此使用前应核对来源与请求的 origin。接入步骤、支持能力、隔离、更新与生命周期细节见[插件设计](docs/design/vendor-plugins.md)。
 
@@ -152,10 +145,10 @@ OpenAI（含 Codex OAuth）· Anthropic（API Key；Claude Pro/Max 订阅 OAuth 
 
 ### 凭据保护
 
-默认关闭。打开一次，所有 Stravia API 密钥的请求都会自动保护 —— 客户端不用改任何东西。
+默认关闭。打开一次，所有 Strinova API 密钥的请求都会自动保护 —— 客户端不用改任何东西。
 
-- **秘密不出本机** —— Stravia 能认出发往模型的消息、历史记录和工具输入/输出里的 API Key、令牌等凭据，在请求发出前替换成占位符。461 条检测规则全部内置、在本机运行，不会把内容发到任何地方校验。
-- **来回无缝衔接** —— 服务商原样返回占位符时，Stravia 会在回答和工具调用里还原成真值，工具照常能用凭据。同一个秘密跨对话、跨重启都用同一个占位符。
+- **秘密不出本机** —— Strinova 能认出发往模型的消息、历史记录和工具输入/输出里的 API Key、令牌等凭据，在请求发出前替换成占位符。461 条检测规则全部内置、在本机运行，不会把内容发到任何地方校验。
+- **来回无缝衔接** —— 服务商原样返回占位符时，Strinova 会在回答和工具调用里还原成真值，工具照常能用凭据。同一个秘密跨对话、跨重启都用同一个占位符。
 - **宁可失败，不偷跑明文** —— 检测或存储出错时，这个请求会直接失败，而不会降级把明文发出去。关掉开关后新请求不再保护，已发出的占位符在过期前仍会还原。
 - **看得见、试得动** —— 翻看全部规则、查看每个请求新保护了哪些凭据，还能拿自己的文本测一测 —— 测试内容只发到当前实例，不会保存。
 
@@ -189,6 +182,8 @@ Rust 工具链以 [`rust-toolchain.toml`](rust-toolchain.toml) 为准 · Bun `1.
 
 项目的 JavaScript 开发、构建与测试命令统一使用 Bun。Rust 和 Python 测试保留各自的原生运行器。
 
+直接运行 Cargo 或在 IDE 中打开工作区前，先运行 `task prepare:crates`（需要 Cargo 和 Git）。该命令按需安装固定版本的 `patch-crate`，并准备补丁依赖；Task 的 Rust 命令会自动执行。`cargo clean` 后需重新准备。准备必须先于构建完成，不要在构建期间刷新补丁源码。补丁更新与离线源配置见[架构文档](docs/design/architecture.md#61-descriptor-与操作入口)。
+
 | 命令                     | 用途                                                 |
 | ------------------------ | ---------------------------------------------------- |
 | `task dev:server`        | 启动 Vite WebUI 和 debug 独立服务端                  |
@@ -199,7 +194,7 @@ Rust 工具链以 [`rust-toolchain.toml`](rust-toolchain.toml) 为准 · Bun `1.
 
 ## 许可证
 
-Stravia 采用 [GNU Affero General Public License v3.0 only](LICENSE)（`AGPL-3.0-only`）许可。
+Strinova 采用 [GNU Affero General Public License v3.0 only](LICENSE)（`AGPL-3.0-only`）许可。
 单独许可的组件继续适用各自条款：`stravia-web-access` 采用 `CC0-1.0 AND MIT`（见 [Cargo.toml](backend/crates/stravia-web-access/Cargo.toml)）；其浏览器隐身脚本保留 [MIT 许可](backend/crates/stravia-web-access/src/browser/stealth/LICENSE)。内置字体采用各自许可证。
 
 ## Star History

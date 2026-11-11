@@ -114,18 +114,17 @@ pub fn apply_anthropic_output_limit(provider: &ProviderSnapshot, request: &mut A
         .filter(|value| *value > 0);
 }
 
-pub fn header_pairs(headers: &http::HeaderMap) -> Result<Vec<(String, String)>, PluginError> {
-    headers
-        .iter()
-        .map(|(name, value)| {
-            value
-                .to_str()
-                .map(|value| (name.as_str().to_owned(), value.to_owned()))
-                .map_err(|_| {
-                    plugin_error(ErrorKind::Invalid, "codec produced a non-text HTTP header")
-                })
-        })
-        .collect()
+/// Converts HeaderMap iteration order and lowercase names to ordered fields.
+/// Plugins requiring exact spelling and interleaving should construct Fields
+/// themselves after the codec has produced its headers.
+pub fn header_pairs(
+    headers: &http::HeaderMap,
+) -> Result<stravia_vendor_sdk::net::Fields, PluginError> {
+    let mut fields = stravia_vendor_sdk::net::Fields::new();
+    for (name, value) in headers {
+        fields.append(name.as_str(), value.as_bytes());
+    }
+    Ok(fields)
 }
 
 /// 宿主下发的上游会话亲和键（`operation_metadata.session_affinity`），供插件
@@ -226,7 +225,9 @@ pub fn decode_compaction_preserving_upstream_errors(
     host: &GuestHost,
     response: HttpResponse,
 ) -> Result<NativeCompactionResponse, PluginError> {
-    preserve_compaction_upstream_errors(host, response, decode_compaction)
+    preserve_compaction_upstream_errors(host, response, |response| {
+        decode_compaction(host, response)
+    })
 }
 
 /// Decode standalone Anthropic compaction (`compaction` request parameter), with the
@@ -242,7 +243,7 @@ pub fn decode_anthropic_compaction_preserving_upstream_errors(
 
 /// Relay a non-success standalone compaction response as the upstream's own
 /// failed envelope; a successful one is handed to `decode`, which owns the
-/// vendor's wire format (unary JSON, or a stream folded into a compact resource).
+/// vendor's native stream format.
 pub fn preserve_compaction_upstream_errors(
     host: &GuestHost,
     response: HttpResponse,
@@ -267,13 +268,30 @@ pub fn preserve_compaction_upstream_errors(
     Err(failure)
 }
 
-pub fn decode_compaction(response: HttpResponse) -> Result<NativeCompactionResponse, PluginError> {
-    let body = read_compaction_body(response)?;
-    stravia_protocol_codec::codec::open_responses::parser::parse_compaction_response(&body).map_err(
+pub fn decode_compaction(
+    host: &GuestHost,
+    response: HttpResponse,
+) -> Result<NativeCompactionResponse, PluginError> {
+    let status = response.status()?;
+    let headers = response.headers()?;
+    if !(200..300).contains(&status) {
+        let body = read_http_body(&response, MAX_ERROR_BODY)?;
+        return Err(upstream_error(status, &headers, &body));
+    }
+    let body = read_http_body(&response, MAX_UNARY_BODY)?;
+    stravia_protocol_codec::codec::compaction::parse_responses_compaction_stream(&body).map_err(
         |error| {
+            if let Some(upstream) = error.downcast_ref::<AiError>() {
+                return match host.emit_delta(&AiStreamDelta::StreamError {
+                    error: upstream.clone(),
+                }) {
+                    Ok(()) => model_error(AiErrorKind::ServerError, error.to_string()),
+                    Err(error) => error,
+                };
+            }
             model_error(
                 AiErrorKind::ServerError,
-                format!("invalid Open Responses compaction response: {error}"),
+                format!("invalid Responses compaction stream: {error}"),
             )
         },
     )
@@ -300,9 +318,10 @@ pub fn decode_anthropic_compaction(
         let body = read_http_body(&response, MAX_ERROR_BODY)?;
         return Err(upstream_error(status, &headers, &body));
     }
-    let streaming = headers.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case("content-type")
-            && value.to_ascii_lowercase().contains("text/event-stream")
+    let streaming = headers.iter().any(|field| {
+        field.name.eq_ignore_ascii_case("content-type")
+            && std::str::from_utf8(&field.bytes)
+                .is_ok_and(|value| value.to_ascii_lowercase().contains("text/event-stream"))
     });
     let body = read_http_body(&response, MAX_UNARY_BODY)?;
     let message = if streaming {
@@ -338,22 +357,6 @@ pub fn decode_anthropic_compaction(
     )
 }
 
-fn read_compaction_body(response: HttpResponse) -> Result<serde_json::Value, PluginError> {
-    let status = response.status()?;
-    let headers = response.headers()?;
-    if !(200..300).contains(&status) {
-        let body = read_http_body(&response, MAX_ERROR_BODY)?;
-        return Err(upstream_error(status, &headers, &body));
-    }
-    let body = read_http_body(&response, MAX_UNARY_BODY)?;
-    serde_json::from_slice(&body).map_err(|error| {
-        model_error(
-            AiErrorKind::ServerError,
-            format!("upstream returned invalid compaction JSON: {error}"),
-        )
-    })
-}
-
 pub fn decode_ai_response(
     host: &GuestHost,
     protocol: &str,
@@ -375,6 +378,15 @@ pub enum HttpResponseMode {
     Streaming,
 }
 
+type ToolCallback<'a> = &'a mut dyn FnMut(&str) -> Result<(), PluginError>;
+type EventObserver<'a> = &'a mut dyn FnMut(&serde_json::Value) -> Result<(), PluginError>;
+
+#[derive(Default)]
+struct ResponseToolHooks<'a> {
+    rename_tool: Option<fn(&str) -> Option<String>>,
+    callback: Option<ToolCallback<'a>>,
+}
+
 pub fn decode_ai_response_with_error_classifier(
     host: &GuestHost,
     protocol: &str,
@@ -389,7 +401,7 @@ pub fn decode_ai_response_with_error_classifier(
         mode,
         classify_error,
         false,
-        None,
+        ResponseToolHooks::default(),
     )
 }
 
@@ -411,7 +423,38 @@ pub fn decode_ai_response_renaming_tools(
         HttpResponseMode::HeaderDetected,
         classify_error,
         false,
-        Some(rename_tool),
+        ResponseToolHooks {
+            rename_tool: Some(rename_tool),
+            callback: None,
+        },
+    )
+}
+
+/// Decode with a fallible hook before a named tool start or completed call
+/// becomes visible. The hook receives the renamed tool name. It may be called more than once for
+/// a call represented by multiple completion events and must therefore be
+/// idempotent. An error aborts decoding before the corresponding emission.
+/// Guest host operations are synchronous at this API boundary, including calls
+/// that suspend while the host performs asynchronous work.
+pub fn decode_ai_response_renaming_tools_with_callback(
+    host: &GuestHost,
+    protocol: &str,
+    response: HttpResponse,
+    classify_error: fn(&serde_json::Value, bool) -> Option<PluginError>,
+    rename_tool: fn(&str) -> Option<String>,
+    callback: &mut dyn FnMut(&str) -> Result<(), PluginError>,
+) -> Result<AiResponse, PluginError> {
+    decode_ai_response_with_error_policy(
+        host,
+        protocol,
+        response,
+        HttpResponseMode::HeaderDetected,
+        classify_error,
+        false,
+        ResponseToolHooks {
+            rename_tool: Some(rename_tool),
+            callback: Some(callback),
+        },
     )
 }
 
@@ -448,7 +491,15 @@ pub fn decode_ai_response_preserving_upstream_errors(
     mode: HttpResponseMode,
     classify_error: fn(&serde_json::Value, bool) -> Option<PluginError>,
 ) -> Result<AiResponse, PluginError> {
-    decode_ai_response_with_error_policy(host, protocol, response, mode, classify_error, true, None)
+    decode_ai_response_with_error_policy(
+        host,
+        protocol,
+        response,
+        mode,
+        classify_error,
+        true,
+        ResponseToolHooks::default(),
+    )
 }
 
 fn decode_ai_response_with_error_policy(
@@ -458,8 +509,12 @@ fn decode_ai_response_with_error_policy(
     mode: HttpResponseMode,
     classify_error: fn(&serde_json::Value, bool) -> Option<PluginError>,
     preserve_upstream_errors: bool,
-    rename_tool: Option<fn(&str) -> Option<String>>,
+    tool_hooks: ResponseToolHooks<'_>,
 ) -> Result<AiResponse, PluginError> {
+    let ResponseToolHooks {
+        rename_tool,
+        mut callback,
+    } = tool_hooks;
     let status = response.status()?;
     let headers = response.headers()?;
     if !(200..300).contains(&status) {
@@ -486,10 +541,13 @@ fn decode_ai_response_with_error_policy(
 
     let endpoint = endpoint(protocol)?;
     let streaming = matches!(mode, HttpResponseMode::Streaming)
-        || headers.iter().any(|(name, value)| {
-            if !name.eq_ignore_ascii_case("content-type") {
+        || headers.iter().any(|field| {
+            if !field.name.eq_ignore_ascii_case("content-type") {
                 return false;
             }
+            let Ok(value) = std::str::from_utf8(&field.bytes) else {
+                return false;
+            };
             let value = value.to_ascii_lowercase();
             value.contains("text/event-stream")
                 || value.contains("application/x-ndjson")
@@ -516,6 +574,7 @@ fn decode_ai_response_with_error_policy(
                 rename_item_tools(item, rename);
             }
         }
+        notify_item_tools(&decoded.items, &mut callback)?;
         return Ok(decoded);
     }
 
@@ -524,6 +583,7 @@ fn decode_ai_response_with_error_policy(
         .map_err(map_response_transform_error)?;
     let mut accumulator = StreamResponseAccumulator::default();
     let mut saw_response_event = false;
+    let mut observed_tool_starts = std::collections::BTreeSet::new();
     while let Some(chunk) = response.read_body()? {
         let mut deltas = decoder
             .decode_chunk(&chunk)
@@ -542,7 +602,14 @@ fn decode_ai_response_with_error_policy(
             )?;
         }
         saw_response_event |= deltas.iter().any(is_response_event);
-        emit_deltas_with_policy(host, &mut accumulator, &deltas, preserve_upstream_errors)?;
+        emit_deltas_with_callback(
+            host,
+            &mut accumulator,
+            &deltas,
+            preserve_upstream_errors,
+            &mut callback,
+            &mut observed_tool_starts,
+        )?;
     }
     let mut deltas = decoder.finish().map_err(map_response_transform_error)?;
     if let Some(rename) = rename_tool {
@@ -558,8 +625,16 @@ fn decode_ai_response_with_error_policy(
             classify_error,
         )?;
     }
-    emit_deltas_with_policy(host, &mut accumulator, &deltas, preserve_upstream_errors)?;
+    emit_deltas_with_callback(
+        host,
+        &mut accumulator,
+        &deltas,
+        preserve_upstream_errors,
+        &mut callback,
+        &mut observed_tool_starts,
+    )?;
     let complete = accumulator.into_ai_response();
+    notify_item_tools(&complete.items, &mut callback)?;
     host.emit_completed(&complete)?;
     Ok(complete)
 }
@@ -567,13 +642,16 @@ fn decode_ai_response_with_error_policy(
 /// Decode Open Responses-style WebSocket JSON events through the same shared
 /// stream codec. Each text frame is wrapped as one SSE event solely for the
 /// codec parser; canonical deltas are still emitted immediately.
+/// The observer sees the already parsed original event before normalization or
+/// emission. Its failure aborts the stream; observing never consumes an event.
 pub fn decode_ai_response_websocket_with_error_classifier(
     host: &GuestHost,
     protocol: &str,
-    connection: stravia_vendor_sdk::WsConnection,
+    connection: stravia_vendor_sdk::net::WebSocket,
     preserve_upstream_errors: bool,
     continuation_requested: bool,
     classify_error: impl Fn(&serde_json::Value, bool) -> Option<PluginError>,
+    observe_event: Option<EventObserver<'_>>,
 ) -> Result<AiResponse, PluginError> {
     decode_normalized_websocket(
         host,
@@ -582,16 +660,18 @@ pub fn decode_ai_response_websocket_with_error_classifier(
         preserve_upstream_errors,
         continuation_requested,
         classify_error,
+        observe_event,
     )
 }
 
 fn decode_normalized_websocket(
     host: &GuestHost,
     protocol: &str,
-    connection: stravia_vendor_sdk::WsConnection,
+    connection: stravia_vendor_sdk::net::WebSocket,
     preserve_upstream_errors: bool,
     continuation_requested: bool,
     classify_error: impl Fn(&serde_json::Value, bool) -> Option<PluginError>,
+    mut observe_event: Option<EventObserver<'_>>,
 ) -> Result<AiResponse, PluginError> {
     let mut reusable = false;
     let result = (|| {
@@ -628,6 +708,9 @@ fn decode_normalized_websocket(
                     format!("inference WebSocket returned invalid JSON: {error}"),
                 )
             })?;
+            if let Some(observer) = observe_event.as_deref_mut() {
+                observer(&value)?;
+            }
             let original_type = value
                 .get("type")
                 .and_then(serde_json::Value::as_str)
@@ -822,11 +905,44 @@ pub fn emit_deltas(
     emit_deltas_with_policy(host, accumulator, deltas, false)
 }
 
+fn notify_item_tools(
+    items: &[AiItem],
+    callback: &mut Option<ToolCallback<'_>>,
+) -> Result<(), PluginError> {
+    if let Some(callback) = callback.as_mut() {
+        for call in items
+            .iter()
+            .flat_map(|item| item.tool_calls.iter().flatten())
+        {
+            callback(&call.name)?;
+        }
+    }
+    Ok(())
+}
+
 fn emit_deltas_with_policy(
     host: &GuestHost,
     accumulator: &mut StreamResponseAccumulator,
     deltas: &[AiStreamDelta],
     preserve_upstream_errors: bool,
+) -> Result<(), PluginError> {
+    emit_deltas_with_callback(
+        host,
+        accumulator,
+        deltas,
+        preserve_upstream_errors,
+        &mut None,
+        &mut std::collections::BTreeSet::new(),
+    )
+}
+
+fn emit_deltas_with_callback(
+    host: &GuestHost,
+    accumulator: &mut StreamResponseAccumulator,
+    deltas: &[AiStreamDelta],
+    preserve_upstream_errors: bool,
+    callback: &mut Option<ToolCallback<'_>>,
+    observed_tool_starts: &mut std::collections::BTreeSet<usize>,
 ) -> Result<(), PluginError> {
     const MESSAGE: &str = "upstream inference stream ended with an error";
     let terminal = deltas.iter().find_map(|delta| match delta {
@@ -839,6 +955,37 @@ fn emit_deltas_with_policy(
         _ => None,
     });
     for delta in deltas {
+        match delta {
+            AiStreamDelta::ToolCallStart { index, name, .. } => {
+                if let Some(callback) = callback.as_mut() {
+                    if name.is_empty() {
+                        return Err(model_error(
+                            AiErrorKind::ServerError,
+                            "upstream tool call started without a name",
+                        ));
+                    }
+                    callback(name)?;
+                    observed_tool_starts.insert(*index);
+                }
+            }
+            AiStreamDelta::ToolCallDelta { index, .. }
+                if callback.is_some() && !observed_tool_starts.contains(index) =>
+            {
+                return Err(model_error(
+                    AiErrorKind::ServerError,
+                    "upstream tool arguments preceded their named start",
+                ));
+            }
+            AiStreamDelta::ToolCallComplete { tool_call, .. } => {
+                if let Some(callback) = callback.as_mut() {
+                    callback(&tool_call.name)?;
+                }
+            }
+            AiStreamDelta::ItemDone { item, .. } => {
+                notify_item_tools(std::slice::from_ref(item), callback)?;
+            }
+            _ => {}
+        }
         if let AiStreamDelta::StreamError { error } = delta {
             if preserve_upstream_errors {
                 host.emit_delta(delta)?;
@@ -906,7 +1053,11 @@ pub fn anthropic_protected_reasoning_message(message: &str) -> bool {
 
 /// Token endpoints only prove revoked authorization with an explicit OAuth
 /// rejection or HTTP 401. Transient statuses always retain their upstream facts.
-pub fn oauth_token_error(status: u16, headers: &[(String, String)], body: &[u8]) -> PluginError {
+pub fn oauth_token_error(
+    status: u16,
+    headers: &stravia_vendor_sdk::net::Fields,
+    body: &[u8],
+) -> PluginError {
     let mut error = upstream_error(status, headers, body);
     let value = serde_json::from_slice::<serde_json::Value>(body).unwrap_or_default();
     let permanent = (400..500).contains(&status)
@@ -927,7 +1078,11 @@ pub fn oauth_token_error(status: u16, headers: &[(String, String)], body: &[u8])
     error
 }
 
-pub fn upstream_error(status: u16, headers: &[(String, String)], body: &[u8]) -> PluginError {
+pub fn upstream_error(
+    status: u16,
+    headers: &stravia_vendor_sdk::net::Fields,
+    body: &[u8],
+) -> PluginError {
     let value = serde_json::from_slice::<serde_json::Value>(body).unwrap_or_default();
     let message = value
         .pointer("/error/message")
@@ -976,12 +1131,13 @@ pub fn upstream_error(status: u16, headers: &[(String, String)], body: &[u8]) ->
 /// Unified subscription headers are distinct from ordinary Anthropic request/token
 /// rate limits. Require the claimed window to be exhausted and extra usage to be
 /// explicitly unavailable; a rejected header or long Retry-After alone is not quota.
-fn anthropic_subscription_exhausted(headers: &[(String, String)]) -> bool {
+fn anthropic_subscription_exhausted(headers: &stravia_vendor_sdk::net::Fields) -> bool {
     let header = |name: &str| {
         headers
             .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.trim())
+            .find(|field| field.name.eq_ignore_ascii_case(name))
+            .and_then(|field| std::str::from_utf8(&field.bytes).ok())
+            .map(str::trim)
     };
     let (status_header, utilization_header) =
         match header("anthropic-ratelimit-unified-representative-claim") {
@@ -1017,11 +1173,12 @@ fn model_error_with_facts(
     }
 }
 
-fn retry_after(headers: &[(String, String)]) -> Option<Duration> {
+fn retry_after(headers: &stravia_vendor_sdk::net::Fields) -> Option<Duration> {
     headers
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
-        .and_then(|(_, value)| parse_retry_after(value, Utc::now()))
+        .find(|field| field.name.eq_ignore_ascii_case("retry-after"))
+        .and_then(|field| std::str::from_utf8(&field.bytes).ok())
+        .and_then(|value| parse_retry_after(value, Utc::now()))
 }
 
 fn parse_retry_after(value: &str, now: DateTime<Utc>) -> Option<Duration> {
@@ -1064,6 +1221,32 @@ pub fn map_response_transform_error(error: TransformError) -> PluginError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fields(headers: &[(String, String)]) -> stravia_vendor_sdk::net::Fields {
+        let mut fields = stravia_vendor_sdk::net::Fields::new();
+        for (name, value) in headers {
+            fields.append(name.as_str(), value.as_bytes());
+        }
+        fields
+    }
+
+    fn upstream_error(status: u16, headers: &[(String, String)], body: &[u8]) -> PluginError {
+        super::upstream_error(status, &fields(headers), body)
+    }
+
+    fn oauth_token_error(status: u16, headers: &[(String, String)], body: &[u8]) -> PluginError {
+        super::oauth_token_error(status, &fields(headers), body)
+    }
+
+    #[test]
+    fn codec_headers_preserve_duplicates_and_bytes() {
+        let mut headers = http::HeaderMap::new();
+        headers.append("x-test", http::HeaderValue::from_bytes(b"first").unwrap());
+        headers.append("x-test", http::HeaderValue::from_bytes(b"\x80").unwrap());
+        let fields = header_pairs(&headers).unwrap();
+        let values: Vec<_> = fields.iter().map(|field| field.bytes.as_slice()).collect();
+        assert_eq!(values, vec![b"first".as_slice(), b"\x80".as_slice()]);
+    }
 
     #[test]
     fn oauth_rejection_requires_permanent_evidence() {

@@ -195,15 +195,29 @@ fn token_request(host: &GuestHost, params: &[(&str, &str)]) -> Result<Value, Plu
     let form: String = url::form_urlencoded::Serializer::new(String::new())
         .extend_pairs(params.iter().copied())
         .finish();
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: "POST".into(),
-        url: TOKEN_URL.into(),
-        headers: vec![(
-            "content-type".into(),
-            "application/x-www-form-urlencoded".into(),
-        )],
-        body: form.into_bytes(),
-    })?;
+    let mut headers = stravia_vendor_sdk::net::Fields::new();
+    headers.slot("Host");
+    headers.append("User-Agent", b"Go-http-client/2.0".as_slice());
+    headers.slot("Content-Length");
+    headers.append(
+        "Content-Type",
+        b"application/x-www-form-urlencoded".as_slice(),
+    );
+    headers.append("Accept-Encoding", b"gzip".as_slice());
+    let mut options = stravia_vendor_sdk::net::Options::new();
+    options.shape("antigravity").expect("valid shape");
+    options
+        .response_decoding(&[stravia_vendor_sdk::net::Coding::Gzip])
+        .expect("valid decoding");
+    let response = host.http_start(
+        stravia_vendor_sdk::net::Request {
+            method: "POST".into(),
+            url: TOKEN_URL.into(),
+            headers,
+            body: form.into_bytes(),
+        },
+        &options,
+    )?;
     let status = response.status()?;
     let headers = response.headers()?;
     let body = read_http_body(&response, client::MAX_JSON_BODY)?;

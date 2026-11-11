@@ -2,9 +2,26 @@ use serde_json::{Value, json};
 use stravia_vendor_common::common::{plugin_error, upstream_error};
 use stravia_vendor_sdk::{ErrorKind, GuestHost, PluginError, ProviderSnapshot, read_http_body};
 
+use stravia_vendor_sdk::net::{Coding, Fields, HttpVersion, Options, Request};
+
 pub(crate) const MAX_JSON_BODY: usize = 4 * 1024 * 1024;
 
-pub(crate) fn headers(provider: &ProviderSnapshot) -> Result<Vec<(String, String)>, PluginError> {
+pub(crate) fn http_start(
+    host: &GuestHost,
+    request: Request,
+) -> Result<stravia_vendor_sdk::HttpResponse, PluginError> {
+    let mut options = Options::new();
+    options.shape("antigravity").expect("valid shape");
+    options
+        .http_version(HttpVersion::Http1)
+        .expect("valid HTTP version");
+    options
+        .response_decoding(&[Coding::Gzip])
+        .expect("valid decoding");
+    host.http_start(request, &options)
+}
+
+pub(crate) fn headers(provider: &ProviderSnapshot) -> Result<Fields, PluginError> {
     stravia_vendor_common::identity::validate(&provider.options)?;
     let token = credential(provider, "access_token")
         .ok_or_else(|| plugin_error(ErrorKind::Auth, "Antigravity access token is missing"))?;
@@ -14,19 +31,19 @@ pub(crate) fn headers(provider: &ProviderSnapshot) -> Result<Vec<(String, String
             "Antigravity access token is malformed",
         ));
     }
-    // 固定客户端身份，不转发下游请求头。
-    Ok(vec![
-        ("authorization".into(), format!("Bearer {token}")),
-        ("content-type".into(), "application/json".into()),
-        (
-            "user-agent".into(),
-            stravia_vendor_common::identity::user_agent(
-                provider,
-                "antigravity/cli/{version} (aidev_client; os_type=linux; arch=amd64; auth_method=consumer)",
-                stravia_vendor_common::identity::version(provider, "1.3.5"),
-            ),
-        ),
-    ])
+    // Go HTTP/1 writes its transport-owned framing fields in these slots.
+    let mut headers = Fields::new();
+    headers.slot("Host");
+    headers.append("User-Agent", stravia_vendor_common::identity::user_agent(
+        provider,
+        "antigravity/cli/{version} (aidev_client; os_type=linux; arch=amd64; cl=1015175089; auth_method=consumer)",
+        stravia_vendor_common::identity::version(provider, "1.5.2"),
+    ).into_bytes());
+    headers.slot("Content-Length");
+    headers.append("Authorization", format!("Bearer {token}").into_bytes());
+    headers.append("Content-Type", b"application/json".as_slice());
+    headers.append("Accept-Encoding", b"gzip".as_slice());
+    Ok(headers)
 }
 
 pub(crate) fn root(provider: &ProviderSnapshot) -> &str {
@@ -65,18 +82,22 @@ pub(crate) fn request_json(
     host: &GuestHost,
     method: &str,
     url: String,
-    mut headers: Vec<(String, String)>,
+    mut headers: Fields,
     body: Vec<u8>,
 ) -> Result<Value, PluginError> {
     if method != "POST" {
-        headers.retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
+        headers.remove("content-type");
+        headers.remove("content-length");
     }
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: method.into(),
-        url,
-        headers,
-        body,
-    })?;
+    let response = http_start(
+        host,
+        Request {
+            method: method.into(),
+            url,
+            headers,
+            body,
+        },
+    )?;
     let status = response.status()?;
     let headers = response.headers()?;
     let body = read_http_body(&response, MAX_JSON_BODY)?;

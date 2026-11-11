@@ -1,4 +1,4 @@
-# Stravia-PX
+# Strinova
 
 自用的 Stravia 补丁与原生部署维护记录。基线为官方 **v0.6.4**
 （`a100ef42031073fbdd779e4809fb83cac3a8b956`），保留官方源码历史及 AGPL-3.0 许可证。

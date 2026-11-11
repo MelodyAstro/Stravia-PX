@@ -149,6 +149,10 @@ export function localizeBackendErrorMessage(error: unknown, locale: Locale = get
       return m.request_models_error_internal_key({}, options)
     case 'REQUEST_MODELS_SESSION_LIMIT':
       return m.request_models_error_session_limit({}, options)
+    case 'VENDOR_PLUGIN_INCOMPATIBLE_ABI':
+      return m.backend_error_vendor_plugin_incompatible({}, options)
+    case 'VENDOR_PLUGIN_REQUIRES_NEWER_HOST':
+      return m.backend_error_vendor_plugin_requires_newer_host({}, options)
     case 'invalid_credentials':
       return m.login_invalid_credentials({}, options)
     case 'unauthorized':

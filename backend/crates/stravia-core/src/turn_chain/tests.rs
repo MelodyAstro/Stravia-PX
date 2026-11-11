@@ -91,6 +91,130 @@ async fn sweep_beyond_retention(store: &SqlTurnChainStore) {
     store.sweep_history(beyond_retention()).await.unwrap();
 }
 
+#[tokio::test]
+async fn checkpoint_reference_is_principal_scoped_and_follows_node_retention() {
+    let store = crate::turn_chain::test_store().await;
+    let pool = match &store.backend {
+        Backend::Sqlite(pool) => pool,
+        Backend::Postgres(_) => unreachable!("SQLite test store"),
+    };
+    let owner = principal("checkpoint-owner");
+    let checkpoint = "checkpoint-1";
+    sqlx::query("INSERT INTO vendor_atomic_leases(principal,admission_id,lease_id,expires_at_ms) VALUES($1,$2,$3,$4)")
+        .bind(owner.continuation_key()).bind("admission-1").bind("lease-1").bind(now_millis() + BEYOND_RETENTION_MS)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO vendor_atomic_checkpoints(principal,checkpoint_id,admission_id,lease_id,created_at_ms) VALUES($1,$2,$3,$4,$5)")
+        .bind(owner.continuation_key()).bind(checkpoint).bind("admission-1").bind("lease-1").bind(now_millis())
+        .execute(pool).await.unwrap();
+    let make_commit = |id: TurnNodeId, principal: Principal, checkpoint: &str| TurnCommit {
+        id,
+        kind: TurnNodeKind::Response,
+        parent_id: None,
+        principal,
+        payload_version: 1,
+        payload: serde_json::json!({"message": "checkpoint"}),
+        marker_references: Vec::new(),
+        redaction_references: Vec::new(),
+        compaction_record_ids: Vec::new(),
+        atomic_checkpoint_id: Some(checkpoint.to_owned()),
+        reusable_prefix: None,
+    };
+    let missing = TurnNodeId::response();
+    assert_eq!(
+        store
+            .commit(make_commit(missing.clone(), owner.clone(), "missing"))
+            .await,
+        Err(TurnCommitError::AtomicStateUnavailable)
+    );
+    assert_eq!(scoped_node_count(&store, &missing).await, 0);
+    let wrong_owner = TurnNodeId::response();
+    assert_eq!(
+        store
+            .commit(make_commit(
+                wrong_owner.clone(),
+                principal("other"),
+                checkpoint
+            ))
+            .await,
+        Err(TurnCommitError::AtomicStateUnavailable)
+    );
+    assert_eq!(scoped_node_count(&store, &wrong_owner).await, 0);
+    sqlx::query("INSERT INTO vendor_atomic_leases(principal,admission_id,lease_id,expires_at_ms) VALUES($1,$2,$3,$4)")
+        .bind(owner.continuation_key()).bind("admission-1").bind("stale-lease").bind(now_millis() - 1)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO vendor_atomic_checkpoints(principal,checkpoint_id,admission_id,lease_id,created_at_ms) VALUES($1,$2,$3,$4,$5)")
+        .bind(owner.continuation_key()).bind("stale-checkpoint").bind("admission-1").bind("stale-lease").bind(now_millis())
+        .execute(pool).await.unwrap();
+    let stale = TurnNodeId::response();
+    assert_eq!(
+        store
+            .commit(make_commit(
+                stale.clone(),
+                owner.clone(),
+                "stale-checkpoint"
+            ))
+            .await,
+        Err(TurnCommitError::AtomicStateUnavailable)
+    );
+    assert_eq!(scoped_node_count(&store, &stale).await, 0);
+    let id = TurnNodeId::response();
+    store
+        .commit(make_commit(id.clone(), owner, checkpoint))
+        .await
+        .unwrap();
+    let references: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM turn_node_atomic_checkpoints WHERE checkpoint_id=$1",
+    )
+    .bind(checkpoint)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(references, 1);
+    // Once the operation ends, the committed node—not its admission or lease—
+    // must retain the checkpoint until the node itself is collected.
+    sqlx::query("UPDATE vendor_atomic_leases SET expires_at_ms=$1 WHERE lease_id=$2")
+        .bind(now_millis() - 1)
+        .bind("lease-1")
+        .execute(pool)
+        .await
+        .unwrap();
+    let plugins = crate::plugin::PluginStore::sqlite(pool.clone());
+    let storage = crate::storage::SqliteStorage::from_pool(pool.clone());
+    let admissions = crate::storage::Storage::prompt_admissions(&storage);
+    plugins
+        .sweep_conversation_atomic_state(now_millis() + 1, admissions.as_ref())
+        .await
+        .unwrap();
+    let checkpoints: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM vendor_atomic_checkpoints WHERE checkpoint_id=$1")
+            .bind(checkpoint)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(checkpoints, 1);
+    sweep_beyond_retention(&store).await;
+    assert_eq!(scoped_node_count(&store, &id).await, 0);
+    let references: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM turn_node_atomic_checkpoints WHERE checkpoint_id=$1",
+    )
+    .bind(checkpoint)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(references, 0);
+    plugins
+        .sweep_conversation_atomic_state(now_millis() + 1, admissions.as_ref())
+        .await
+        .unwrap();
+    let checkpoints: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM vendor_atomic_checkpoints WHERE checkpoint_id=$1")
+            .bind(checkpoint)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(checkpoints, 0);
+}
+
 async fn scoped_node_count(store: &SqlTurnChainStore, id: &TurnNodeId) -> i64 {
     let query = "SELECT COUNT(*) FROM turn_nodes WHERE id = $1";
     match &store.backend {
@@ -144,6 +268,97 @@ async fn mark_deleting(store: &SqlTurnChainStore, id: &TurnNodeId) {
     }
 }
 
+async fn set_node_created_at(store: &SqlTurnChainStore, id: &TurnNodeId, created_at: i64) {
+    match &store.backend {
+        Backend::Sqlite(pool) => {
+            sqlx::query("UPDATE turn_nodes SET created_at = $2 WHERE id = $1")
+                .bind(id.as_str())
+                .bind(created_at)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        Backend::Postgres(pool) => {
+            sqlx::query("UPDATE turn_nodes SET created_at = $2 WHERE id = $1")
+                .bind(id.as_str())
+                .bind(created_at)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+}
+
+async fn assert_node_kind_contract(store: &SqlTurnChainStore) {
+    let owner = principal("node-kind-owner");
+    let foreign = principal("node-kind-foreign");
+    let cases = [
+        (TurnNodeId::web_search(), TurnNodeKind::WebSearch),
+        (TurnNodeId::agent(), TurnNodeKind::Agent),
+        (TurnNodeId::response(), TurnNodeKind::Response),
+    ];
+    for (id, kind) in &cases {
+        store
+            .commit(TurnCommit {
+                atomic_checkpoint_id: None,
+                id: id.clone(),
+                kind: *kind,
+                parent_id: None,
+                principal: owner.clone(),
+                payload_version: 1,
+                payload: serde_json::json!({"system": "node kind"}),
+                marker_references: Vec::new(),
+                redaction_references: Vec::new(),
+                compaction_record_ids: Vec::new(),
+                reusable_prefix: None,
+            })
+            .await
+            .expect("node kind fixture");
+        assert_eq!(store.node_kind(&owner, id).await.unwrap(), *kind);
+        assert_eq!(
+            store.node_kind(&foreign, id).await,
+            Err(TurnUnavailable::Unavailable),
+            "node kinds must stay inside their Principal"
+        );
+    }
+
+    // 到期节点不可见，即使 GC 尚未把它移出队列。
+    let expired = TurnNodeId::agent();
+    store
+        .commit(TurnCommit {
+            atomic_checkpoint_id: None,
+            id: expired.clone(),
+            kind: TurnNodeKind::Agent,
+            parent_id: None,
+            principal: owner.clone(),
+            payload_version: 1,
+            payload: serde_json::json!({"system": "expired node kind"}),
+            marker_references: Vec::new(),
+            redaction_references: Vec::new(),
+            compaction_record_ids: Vec::new(),
+            reusable_prefix: None,
+        })
+        .await
+        .expect("expired node kind fixture");
+    set_node_created_at(
+        store,
+        &expired,
+        now_millis() - store.retention.window_millis() - 1,
+    )
+    .await;
+    assert_eq!(
+        store.node_kind(&owner, &expired).await,
+        Err(TurnUnavailable::Unavailable)
+    );
+
+    mark_deleting(store, &cases[0].0).await;
+    assert_eq!(
+        store.node_kind(&owner, &cases[0].0).await,
+        Err(TurnUnavailable::Unavailable),
+        "deleting nodes are unavailable before their deadline"
+    );
+}
+
 async fn begin_collecting_first_reference(store: &SqlTurnChainStore, id: &TurnNodeId) {
     macro_rules! begin {
         ($pool:expr, $enqueue:path) => {{
@@ -184,6 +399,7 @@ async fn large_retention_sweep_preserves_live_history_and_native_login() {
     let payload = serde_json::json!({"effective_system": "shared instructions ".repeat(100)});
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: live.clone(),
             kind: TurnNodeKind::Response,
             parent_id: None,
@@ -341,6 +557,7 @@ async fn sqlite_gc_collects_persisted_content_candidates_without_scanning_live_c
     let payload = serde_json::json!({"system": "live content"});
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: live.clone(),
             kind: TurnNodeKind::Response,
             parent_id: None,
@@ -428,6 +645,7 @@ async fn sqlite_gc_drains_references_beyond_one_batch_and_keeps_shared_content()
         .collect();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: expired.clone(),
             kind: TurnNodeKind::Response,
             parent_id: None,
@@ -445,6 +663,7 @@ async fn sqlite_gc_drains_references_beyond_one_batch_and_keeps_shared_content()
     let boundary = tick().await;
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: live.clone(),
             kind: TurnNodeKind::Response,
             parent_id: None,
@@ -506,6 +725,11 @@ async fn sqlite_gc_drains_references_beyond_one_batch_and_keeps_shared_content()
 }
 
 #[tokio::test]
+async fn sqlite_node_kind_distinguishes_kinds_and_respects_visibility() {
+    assert_node_kind_contract(&test_store().await).await;
+}
+
+#[tokio::test]
 async fn sqlite_deleting_retention_is_unavailable_and_sweep_finishes_it() {
     assert_deleting_retention_contract(&test_store().await).await;
 }
@@ -516,6 +740,7 @@ async fn committed_root_materializes_through_the_public_store_interface() {
     let id = TurnNodeId::agent();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: id.clone(),
             kind: TurnNodeKind::Agent,
             parent_id: None,
@@ -556,6 +781,7 @@ async fn sqlite_turn_chain_survives_store_reconstruction() {
         crate::history_retention::HistoryRetention::for_tests(),
     )
     .commit(TurnCommit {
+        atomic_checkpoint_id: None,
         id: id.clone(),
         kind: TurnNodeKind::Response,
         parent_id: None,
@@ -591,6 +817,7 @@ async fn sibling_branches_are_isolated_and_principal_scoped() {
     let root = TurnNodeId::agent();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: root.clone(),
             kind: TurnNodeKind::Agent,
             parent_id: None,
@@ -609,6 +836,7 @@ async fn sibling_branches_are_isolated_and_principal_scoped() {
     for (id, message) in [(&branch_a, "a"), (&branch_b, "b")] {
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id: id.clone(),
                 kind: TurnNodeKind::Agent,
                 parent_id: Some(root.clone()),
@@ -652,6 +880,7 @@ async fn sibling_branches_are_isolated_and_principal_scoped() {
     assert_eq!(
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id: TurnNodeId::response(),
                 kind: TurnNodeKind::Response,
                 parent_id: Some(branch_a),
@@ -680,6 +909,7 @@ async fn expired_sibling_is_collected_without_breaking_live_prefix_or_shared_con
     let root = TurnNodeId::agent();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: root.clone(),
             kind: TurnNodeKind::Agent,
             parent_id: None,
@@ -696,6 +926,7 @@ async fn expired_sibling_is_collected_without_breaking_live_prefix_or_shared_con
     let stale = TurnNodeId::agent();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: stale.clone(),
             kind: TurnNodeKind::Agent,
             parent_id: Some(root.clone()),
@@ -714,6 +945,7 @@ async fn expired_sibling_is_collected_without_breaking_live_prefix_or_shared_con
     let live = TurnNodeId::agent();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: live.clone(),
             kind: TurnNodeKind::Agent,
             parent_id: Some(root),
@@ -776,6 +1008,7 @@ async fn old_ancestor_is_retained_while_a_descendant_exists_and_collected_with_i
     ] {
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id,
                 kind: TurnNodeKind::Agent,
                 parent_id: parent,
@@ -798,6 +1031,7 @@ async fn old_ancestor_is_retained_while_a_descendant_exists_and_collected_with_i
     );
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: grandchild.clone(),
             kind: TurnNodeKind::Agent,
             parent_id: Some(child.clone()),
@@ -847,6 +1081,7 @@ async fn sqlite_sweep_collects_an_expired_chain_longer_than_one_node_batch() {
         let id = TurnNodeId::agent();
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id: id.clone(),
                 kind: TurnNodeKind::Agent,
                 parent_id: head.take(),
@@ -903,6 +1138,7 @@ async fn sqlite_materialize_rejects_missing_or_corrupt_storage_facts() {
     let payload = serde_json::json!({"system": "authoritative content"});
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: id.clone(),
             kind: TurnNodeKind::Response,
             parent_id: None,
@@ -1063,6 +1299,7 @@ async fn assert_reusable_prefix_store_contract(store: Arc<dyn TurnChainStore>) {
     ] {
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id: TurnNodeId::new(id),
                 kind: TurnNodeKind::Response,
                 parent_id: None,
@@ -1179,6 +1416,7 @@ async fn assert_postgres_concurrent_commits_and_gc(store: &SqlTurnChainStore) {
     let root = TurnNodeId::response();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: root.clone(),
             kind: TurnNodeKind::Response,
             parent_id: None,
@@ -1195,6 +1433,7 @@ async fn assert_postgres_concurrent_commits_and_gc(store: &SqlTurnChainStore) {
     let expired = TurnNodeId::response();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: expired.clone(),
             kind: TurnNodeKind::Response,
             parent_id: Some(root.clone()),
@@ -1212,6 +1451,7 @@ async fn assert_postgres_concurrent_commits_and_gc(store: &SqlTurnChainStore) {
     // 边界之后提交的锚点子节点始终保护根节点，回收时钟只让 expired 越过保留期。
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: TurnNodeId::response(),
             kind: TurnNodeKind::Response,
             parent_id: Some(root.clone()),
@@ -1236,6 +1476,7 @@ async fn assert_postgres_concurrent_commits_and_gc(store: &SqlTurnChainStore) {
                 let id = TurnNodeId::response();
                 store
                     .commit(TurnCommit {
+                        atomic_checkpoint_id: None,
                         id: id.clone(),
                         kind: TurnNodeKind::Response,
                         parent_id: Some(root),
@@ -1302,6 +1543,7 @@ async fn assert_deleting_retention_contract(store: &SqlTurnChainStore) {
     let id = TurnNodeId::new("deleting-target");
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: id.clone(),
             kind: TurnNodeKind::Response,
             parent_id: None,
@@ -1365,6 +1607,7 @@ async fn assert_deleting_retention_contract(store: &SqlTurnChainStore) {
         store
             .commit(TurnCommit {
                 id: TurnNodeId::new("deleting-child"),
+                atomic_checkpoint_id: None,
                 kind: TurnNodeKind::Response,
                 parent_id: Some(id.clone()),
                 principal: owner.clone(),
@@ -1443,6 +1686,7 @@ async fn postgres_reusable_prefix_store_contract_when_configured() {
     assert_projection_proofs_exclude_only_known_mismatches_and_rebuild_old_indexes(&store).await;
     assert_postgres_concurrent_commits_and_gc(&store).await;
     assert_deleting_retention_contract(&store).await;
+    assert_node_kind_contract(&store).await;
     pool.close().await;
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
         .execute(&admin)
@@ -1460,6 +1704,7 @@ async fn reusable_prefix_lookup_is_principal_scoped_and_longest_first() {
     ] {
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id: TurnNodeId::new(id),
                 kind: TurnNodeKind::Response,
                 parent_id: None,
@@ -1522,6 +1767,7 @@ async fn sqlite_reusable_prefix_metadata_survives_store_reconstruction() {
         crate::history_retention::HistoryRetention::for_tests(),
     )
     .commit(TurnCommit {
+        atomic_checkpoint_id: None,
         id: TurnNodeId::new("resp_indexed"),
         kind: TurnNodeKind::Response,
         parent_id: None,
@@ -1590,6 +1836,7 @@ async fn sqlite_ancestor_walks_do_not_scan_unrelated_principal_nodes() {
         let id = TurnNodeId::agent();
         setup
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id: id.clone(),
                 kind: TurnNodeKind::Agent,
                 parent_id: head.take(),
@@ -1679,6 +1926,7 @@ async fn sqlite_ancestor_walks_do_not_scan_unrelated_principal_nodes() {
     ticks.store(0, std::sync::atomic::Ordering::Relaxed);
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: TurnNodeId::agent(),
             kind: TurnNodeKind::Agent,
             parent_id: Some(head),
@@ -1818,6 +2066,7 @@ async fn request_context_reuses_validated_ancestors_before_payload_fetch() {
     for (id, parent) in [(root.clone(), None), (child.clone(), Some(root.clone()))] {
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id,
                 parent_id: parent,
                 principal: owner.clone(),
@@ -2021,6 +2270,7 @@ async fn assert_cached_prefix_keeps_the_head_expiry(store: &SqlTurnChainStore) {
     let root = TurnNodeId::response();
     let child = TurnNodeId::response();
     let commit = |id: &TurnNodeId, parent: Option<&TurnNodeId>| TurnCommit {
+        atomic_checkpoint_id: None,
         id: id.clone(),
         parent_id: parent.cloned(),
         principal: owner.clone(),
@@ -2060,6 +2310,7 @@ async fn assert_expired_query_cutoff_proof_falls_back_to_current_facts(store: &S
     let child = TurnNodeId::response();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: root.clone(),
             parent_id: None,
             principal: owner.clone(),
@@ -2087,6 +2338,7 @@ async fn assert_expired_query_cutoff_proof_falls_back_to_current_facts(store: &S
     // 追加子节点不改变祖先的创建时间，也不会让旧的请求证明失效。
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: child.clone(),
             parent_id: Some(root.clone()),
             principal: owner.clone(),
@@ -2251,6 +2503,7 @@ async fn assert_projection_proofs_exclude_only_known_mismatches_and_rebuild_old_
     ] {
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id: TurnNodeId::new(id),
                 kind: TurnNodeKind::Response,
                 parent_id: None,
@@ -2434,6 +2687,7 @@ async fn assert_prefix_rebuild_decodes_shared_ancestors_once(store: &SqlTurnChai
     ] {
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id: TurnNodeId::new(id),
                 kind: TurnNodeKind::Response,
                 parent_id: parent.map(TurnNodeId::new),
@@ -2613,6 +2867,7 @@ async fn assert_request_context_contract(store: &SqlTurnChainStore) {
     {
         store
             .commit(TurnCommit {
+                atomic_checkpoint_id: None,
                 id,
                 parent_id,
                 payload,
@@ -2750,6 +3005,7 @@ async fn assert_request_context_contract(store: &SqlTurnChainStore) {
     let corrupt = TurnNodeId::response();
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: corrupt.clone(),
             parent_id: Some(root.clone()),
             principal: owner.clone(),
@@ -2886,6 +3142,7 @@ async fn assert_request_context_contract(store: &SqlTurnChainStore) {
     }
     store
         .commit(TurnCommit {
+            atomic_checkpoint_id: None,
             id: TurnNodeId::response(),
             parent_id: None,
             principal: principal("foreign-content"),

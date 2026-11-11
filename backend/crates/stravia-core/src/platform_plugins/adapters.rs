@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use stravia_platform_plugin_runtime::LoadedPlugin;
 use stravia_runtime_contract::CancellationToken;
 use stravia_runtime_contract::hook::*;
-use stravia_runtime_contract::protocol::ir::{AiRequest, AiResponse};
+use stravia_runtime_contract::protocol::ir::{AiRequest, AiResponse, AiItem};
 
 use super::{HookKind, ToolManifest, schema};
 
@@ -264,6 +264,10 @@ struct PluginHookSession {
 #[async_trait]
 impl HookSession for PluginHookSession {
     async fn handle(&mut self, event: HookEvent<'_>) -> Result<ActionBatch, String> {
+        let request_scope = match &event {
+            HookEvent::Request { current, input_start, .. } => Some((*current, *input_start)),
+            _ => None,
+        };
         let kind = match event.kind() {
             EventKind::Request => HookKind::Request,
             EventKind::UpstreamResponse => HookKind::UpstreamResponse,
@@ -287,7 +291,7 @@ impl HookSession for PluginHookSession {
                 return Err("plugin hook returned more than 64 actions".into());
             }
             for action in batch.actions {
-                actions.push(action.into_action()?);
+                actions.extend(action.into_actions(request_scope)?);
             }
         }
         if matches!(kind, HookKind::Request) && !self.tools_fixed {
@@ -322,13 +326,14 @@ fn event_input(event: HookEvent<'_>) -> anyhow::Result<(HookKind, &'static str, 
     let (kind, operation, mut input, route) = match event {
         HookEvent::Request {
             current,
+            input_start,
             round,
             route,
             ..
         } => (
             HookKind::Request,
             "request",
-            json!({"request": current, "round": round}),
+            json!({"request": current, "input_start": input_start, "round": round}),
             route,
         ),
         HookEvent::UpstreamResponse {
@@ -406,6 +411,11 @@ enum PluginAction {
     SetReasoning {
         value: Option<String>,
     },
+    SpliceInput {
+        start: usize,
+        end: usize,
+        items: Vec<AiItem>,
+    },
     ReplaceRequest {
         value: Box<AiRequest>,
     },
@@ -423,8 +433,12 @@ enum PluginAction {
 }
 
 impl PluginAction {
-    fn into_action(self) -> Result<HookAction, String> {
-        Ok(match self {
+    fn into_actions(self, request_scope: Option<(&AiRequest, usize)>) -> Result<Vec<HookAction>, String> {
+        if let Self::ReplaceRequest { value } = self {
+            let (current, input_start) = request_scope.ok_or("replace_request requires a request event")?;
+            return legacy_request_actions(current, input_start, *value);
+        }
+        Ok(vec![match self {
             Self::SetSystem { value } => {
                 HookAction::PatchRequest(Box::new(RequestPatch::SetSystem(value)))
             }
@@ -437,9 +451,8 @@ impl PluginAction {
             Self::SetReasoning { value } => {
                 HookAction::PatchResponse(ResponsePatch::SetReasoning(value))
             }
-            Self::ReplaceRequest { value } => {
-                HookAction::PatchRequest(Box::new(RequestPatch::ReplaceCanonical(value)))
-            }
+            Self::SpliceInput { start, end, items } => HookAction::PatchRequest(Box::new(RequestPatch::SpliceInput { range: start..end, items })),
+            Self::ReplaceRequest { .. } => unreachable!("handled above"),
             Self::ReplaceResponse { value } => {
                 HookAction::PatchResponse(ResponsePatch::ReplaceCanonical(value))
             }
@@ -462,8 +475,35 @@ impl PluginAction {
                     message,
                 })
             }
-        })
+        }])
     }
+}
+
+/// Translate the v1 whole-request action into admitted v0.6.5 patches. Already
+/// processed history and host metadata cannot be rewritten by this adapter.
+fn legacy_request_actions(current: &AiRequest, input_start: usize, next: AiRequest) -> Result<Vec<HookAction>, String> {
+    if input_start > current.items.len() || input_start > next.items.len() {
+        return Err("replace_request removed processed history".into());
+    }
+    let mut before = serde_json::to_value(current).map_err(|e| e.to_string())?;
+    let mut after = serde_json::to_value(&next).map_err(|e| e.to_string())?;
+    for key in ["model", "instructions", "items", "generation", "tools", "tool_choice", "parameters"] {
+        before.as_object_mut().unwrap().remove(key);
+        after.as_object_mut().unwrap().remove(key);
+    }
+    if before != after || serde_json::to_value(&current.items[..input_start]).map_err(|e|e.to_string())? != serde_json::to_value(&next.items[..input_start]).map_err(|e|e.to_string())? {
+        return Err("replace_request changed protected fields or processed history; use splice_input for new input".into());
+    }
+    let patches = vec![
+        RequestPatch::SetModel(next.model),
+        RequestPatch::SetSystem(next.instructions),
+        RequestPatch::SetGeneration(next.generation),
+        RequestPatch::ReplaceTools(next.tools),
+        RequestPatch::SetToolChoice(next.tool_choice),
+        RequestPatch::SetParameters(Box::new(next.parameters)),
+        RequestPatch::SpliceInput { range: 0..current.items.len()-input_start, items: next.items.into_iter().skip(input_start).collect() },
+    ];
+    Ok(patches.into_iter().map(|patch| HookAction::PatchRequest(Box::new(patch))).collect())
 }
 
 #[cfg(test)]

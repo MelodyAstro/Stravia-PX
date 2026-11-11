@@ -12,7 +12,7 @@ import tarfile
 import tempfile
 
 
-BASE_COMMIT = "a100ef42031073fbdd779e4809fb83cac3a8b956"
+BASE_COMMIT = "42348db6d7fbad32f9bcf56d94fded8a2ec17ec4"
 LOCAL_ONLY_ROOTS = {
     ".aws", ".git", ".scratch", ".stravia-dev", "data", "dist", "evidence",
     "node_modules", "private", "target",

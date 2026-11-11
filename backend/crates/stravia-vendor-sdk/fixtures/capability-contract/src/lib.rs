@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use stravia_vendor_sdk::{
     AiError, AiResponse, CANONICAL_FORMAT_VERSION, Capability, ChannelDescriptor, ConfigField,
-    ConfigFieldKind, ConfigGroup, DataCompatibility, ErrorKind, GuestHost, HttpRequest,
-    MediaImageResponse, NetworkDeclaration, Operation, OperationInput, OperationOutput,
-    PluginError, ProviderDescriptor, SearchResponse, VendorDescriptor, VendorGuest, VendorKind,
-    read_http_body,
+    ConfigFieldKind, ConfigGroup, DataCompatibility, ErrorKind, Fields, GuestHost,
+    MediaImageResponse, NetworkDeclaration, Operation, OperationInput, OperationOutput, Options,
+    PluginError, ProviderDescriptor, Request, SearchResponse, VendorDescriptor, VendorGuest,
+    VendorKind, read_http_body,
 };
 
 struct CapabilityContractVendor;
@@ -126,6 +126,7 @@ impl VendorGuest for CapabilityContractVendor {
             authors: vec!["Stravia test fixture".into()],
             canonical_format_version: CANONICAL_FORMAT_VERSION,
             kind: profile.kind(),
+            egress_shapes: Vec::new(),
             providers: vec![ProviderDescriptor {
                 provider_id: profile.provider_id().into(),
                 catalog_id: (profile == Profile::DedicatedDeepseek).then(|| "deepseek".into()),
@@ -203,12 +204,40 @@ impl VendorGuest for CapabilityContractVendor {
         match input {
             OperationInput::Search { provider, request } => {
                 ensure_capability(Capability::Search)?;
+                let lineage_probe = if request.query.contains("lineage-probe") {
+                    let cell = stravia_vendor_sdk::state::open(
+                        stravia_vendor_sdk::state::Scope::Conversation,
+                        "capability-probe",
+                    )
+                    .map_err(invalid)?;
+                    let snapshot = cell.load().map_err(invalid)?;
+                    let count = snapshot
+                        .payload
+                        .as_deref()
+                        .map(|bytes| {
+                            std::str::from_utf8(bytes)
+                                .map_err(invalid)?
+                                .parse::<u64>()
+                                .map_err(invalid)
+                        })
+                        .transpose()?
+                        .unwrap_or(0);
+                    cell.compare_exchange(
+                        snapshot.revision,
+                        Some((count + 1).to_string().as_bytes()),
+                    )
+                    .map_err(invalid)?;
+                    Some((&provider.operation_metadata, count))
+                } else {
+                    None
+                };
                 let response = post_json::<_, SearchResponse>(
                     host,
                     &provider.base_url,
                     "/search",
                     &request,
                     state_before,
+                    lineage_probe,
                 )?;
                 write_next_state(host, state_before)?;
                 Ok(OperationOutput::Search(response))
@@ -221,6 +250,7 @@ impl VendorGuest for CapabilityContractVendor {
                     "/image",
                     &request,
                     state_before,
+                    None,
                 )?;
                 write_next_state(host, state_before)?;
                 Ok(OperationOutput::MediaImage(response))
@@ -233,6 +263,7 @@ impl VendorGuest for CapabilityContractVendor {
                     "/infer",
                     &request,
                     state_before,
+                    None,
                 )?;
                 if let Some(mode) = response.get("fixture_infer_error").and_then(|v| v.as_str()) {
                     let kind = match mode {
@@ -263,6 +294,7 @@ fn post_json<T, R>(
     path: &str,
     request: &T,
     state_before: u64,
+    lineage_probe: Option<(&std::collections::BTreeMap<String, serde_json::Value>, u64)>,
 ) -> Result<R, PluginError>
 where
     T: serde::Serialize,
@@ -270,24 +302,53 @@ where
 {
     let body = serde_json::to_vec(request).map_err(invalid)?;
     host.emit_started()?;
-    let response = host.http_start(HttpRequest {
-        method: "POST".into(),
-        url: format!("{}{path}", base_url.trim_end_matches('/')),
-        headers: vec![
-            ("content-type".into(), "application/json".into()),
-            ("x-state-before".into(), state_before.to_string()),
-        ],
-        body,
-    })?;
+    let mut headers = Fields::new();
+    headers.append("accept", b"application/json".to_vec());
+    headers.append("accept-encoding", b"identity".to_vec());
+    headers.append("user-agent", b"stravia-capability-fixture".to_vec());
+    headers.append("content-type", b"application/json".to_vec());
+    headers.append("x-state-before", state_before.to_string().into_bytes());
+    if let Some((metadata, count)) = lineage_probe {
+        for key in [
+            "logical_turn_id",
+            "logical_turn_started_at_ms",
+            "context_window_id",
+            "context_window_index",
+        ] {
+            let value = metadata
+                .get(key)
+                .ok_or_else(|| invalid(format!("missing {key}")))?;
+            let value = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            headers.append(
+                &format!("x-probe-{}", key.replace('_', "-")),
+                value.into_bytes(),
+            );
+        }
+        headers.append("x-probe-state-before", count.to_string().into_bytes());
+    }
+    let mut options = Options::new();
+    options.shape("default").map_err(invalid)?;
+    let response = host.http_start(
+        Request {
+            method: "POST".into(),
+            url: format!("{}{path}", base_url.trim_end_matches('/')),
+            headers,
+            body,
+        },
+        &options,
+    )?;
     let status = response.status()?;
     let headers = response.headers()?;
     let body = read_http_body(&response, 8 * 1024 * 1024)?;
     if !(200..300).contains(&status) {
         let payload = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
         let retry_after = headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
-            .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+            .get("retry-after")
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .and_then(|value| value.trim().parse::<u64>().ok())
             .map(Duration::from_secs);
         return Err(PluginError {
             kind: ErrorKind::upstream(

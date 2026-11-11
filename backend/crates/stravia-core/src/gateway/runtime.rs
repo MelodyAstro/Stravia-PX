@@ -1,4 +1,32 @@
 use super::*;
+use crate::plugin::network::VendorNetworkConfig;
+
+const CLIENT_INSTALLATION_ID_KEY: &str = "client_installation_id";
+
+async fn load_client_installation_id(
+    settings: &dyn storage::SettingsStore,
+) -> anyhow::Result<Arc<str>> {
+    let stored = match settings
+        .get(CLIENT_INSTALLATION_ID_KEY)
+        .await
+        .context("failed to load client installation identity")?
+    {
+        Some(stored) => stored,
+        None => {
+            let candidate = uuid::Uuid::new_v4().to_string();
+            settings
+                .get_or_insert(CLIENT_INSTALLATION_ID_KEY, &candidate)
+                .await
+                .context("failed to create client installation identity")?
+        }
+    };
+    let parsed = uuid::Uuid::parse_str(&stored).context("invalid client installation identity")?;
+    anyhow::ensure!(
+        parsed.to_string() == stored && !parsed.is_nil(),
+        "invalid client installation identity"
+    );
+    Ok(Arc::from(stored))
+}
 
 const FIRST_ALLOWANCE_SAMPLE_DELAY: Duration = Duration::from_secs(35 * 60);
 
@@ -205,8 +233,15 @@ impl PreparedGateway {
     /// 不重新连接、迁移数据库，也不把持久存储当作内存存储装配。
     pub async fn start(self) -> anyhow::Result<Gateway> {
         let (kind, storage, sqlite_pool, postgres_pool) = self.runtime;
-        Gateway::from_storage_with_kind(self.config, storage, kind, sqlite_pool, postgres_pool)
-            .await
+        Gateway::from_storage_with_kind(
+            self.config,
+            storage,
+            kind,
+            sqlite_pool,
+            postgres_pool,
+            None,
+        )
+        .await
     }
 }
 
@@ -239,6 +274,12 @@ impl Gateway {
         self.lifecycle.cancellation.cancel();
     }
 
+    #[cfg(test)]
+    pub(crate) async fn stop_background_tasks_for_test(&self) {
+        // 实调用验证必须先排空空实例的维护任务，再导入真实凭据；不关闭请求使用的观测与缓存。
+        self.lifecycle.shutdown().await;
+    }
+
     pub async fn shutdown(&self) {
         self.lifecycle.shutdown().await;
         self.observation.shutdown().await;
@@ -250,7 +291,32 @@ impl Gateway {
     }
 
     pub async fn from_storage(config: GatewayConfig, storage: DynStorage) -> anyhow::Result<Self> {
-        Self::from_storage_with_kind(config, storage, RuntimeStorageKind::Memory, None, None).await
+        Self::from_storage_with_kind(
+            config,
+            storage,
+            RuntimeStorageKind::Memory,
+            None,
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn from_storage_with_vendor_network(
+        config: GatewayConfig,
+        storage: DynStorage,
+        network: VendorNetworkConfig,
+    ) -> anyhow::Result<Self> {
+        Self::from_storage_with_kind(
+            config,
+            storage,
+            RuntimeStorageKind::Memory,
+            None,
+            None,
+            Some(network),
+        )
+        .await
     }
 
     async fn from_storage_with_kind(
@@ -259,7 +325,19 @@ impl Gateway {
         storage_kind: RuntimeStorageKind,
         sqlite_pool: Option<SqlitePool>,
         postgres_pool: Option<Pool<Postgres>>,
+        vendor_network: Option<VendorNetworkConfig>,
     ) -> anyhow::Result<Self> {
+        // 注入持久存储时沿用同一连接池，避免历史与插件状态落入两个数据库。
+        let sqlite_pool = sqlite_pool.or_else(|| storage.vendor_plugins().sqlite_pool().cloned());
+        let postgres_pool =
+            postgres_pool.or_else(|| storage.vendor_plugins().postgres_pool().cloned());
+        let storage_kind = if postgres_pool.is_some() {
+            RuntimeStorageKind::Postgres
+        } else if sqlite_pool.is_some() {
+            RuntimeStorageKind::Sqlite
+        } else {
+            storage_kind
+        };
         crate::startup_progress::report("gateway_initialize", "Initializing gateway", 0, None);
         config.data_dir = crate::data_paths::resolve_data_dir(&config.data_dir)?;
         let runtime_cache = open_runtime_cache(&config, storage_kind).await?;
@@ -275,6 +353,18 @@ impl Gateway {
         } else {
             sqlite_pool.clone()
         };
+        if sqlite_pool.is_none() && postgres_pool.is_none() {
+            storage
+                .vendor_plugins()
+                .attach_atomic_history_pool(
+                    history_sqlite_pool
+                        .as_ref()
+                        .expect("memory history pool")
+                        .clone(),
+                    storage.prompt_admissions().as_ref(),
+                )
+                .await?;
+        }
         crate::startup_progress::report(
             "gateway_initialize",
             "Initializing gateway services",
@@ -286,14 +376,22 @@ impl Gateway {
             .no_proxy()
             .timeout(std::time::Duration::from_secs(300))
             .build()?;
-        // 供应商操作的共享可续期 deadline 管理整个操作；reqwest 总超时
-        // 不随流式活动续期，会截断仍持续输出的长响应。
-        let vendor_http_client = vendor_http_client_builder().no_proxy().build()?;
-        let vendor_websocket_client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .http1_only()
-            .build()?;
+        // Resolve networking before creating model-turn or background clones so
+        // every consumer inherits the same trust, DNS and pool identities.
+        let VendorNetworkConfig {
+            shapes: vendor_shapes,
+            resolver: vendor_resolver,
+        } = match vendor_network {
+            Some(network) => network,
+            None => VendorNetworkConfig {
+                shapes: Arc::new(
+                    crate::plugin::network::shape::ShapeRegistry::builtin()
+                        .context("failed to initialize vendor egress shapes")?,
+                ),
+                resolver: Arc::new(crate::plugin::network::transport::SystemResolver),
+            },
+        };
+        let vendor_transport = Arc::new(crate::plugin::network::transport::VendorTransport::new());
 
         crate::startup_progress::report(
             "gateway_initialize",
@@ -301,11 +399,15 @@ impl Gateway {
             0,
             None,
         );
+        let client_installation_id = load_client_installation_id(storage.settings()).await?;
         let storage = if storage_kind == RuntimeStorageKind::Postgres {
             storage
         } else {
             crate::runtime_config::RuntimeConfig::attach(storage).await?
         };
+        storage.vendor_plugins().attach_volatile_store(
+            crate::plugin::volatile_state::VolatileStore::for_installation(&client_installation_id),
+        );
         let model_cache = Arc::new(tokio::sync::RwLock::new(
             router::RouteCache::load(storage.routes()).await?,
         ));
@@ -463,6 +565,8 @@ impl Gateway {
         )
         .with_history_markers(Arc::clone(&history_markers))
         .with_redaction_references()
+        .with_prompt_admissions(storage.prompt_admissions())
+        .with_atomic_state(storage.vendor_plugins().clone())
         .with_compaction(compaction.clone());
         generation_chains.rebuild_prefixes().await?;
         let observation = interaction_observation::InteractionObservation::new(
@@ -506,6 +610,7 @@ impl Gateway {
                 wasmtime: paths.wasmtime_cache(),
                 admissions: paths.plugin_admissions(),
             }),
+            Arc::clone(&vendor_shapes),
         )
         .await?;
         let catalog_base_url = config.catalog_base_url.clone();
@@ -518,10 +623,12 @@ impl Gateway {
             config,
             storage,
             storage_kind,
+            client_installation_id,
             runtime_cache: runtime_cache.clone(),
             http_client,
-            vendor_http_client: vendor_http_client.clone(),
-            vendor_websocket_client: vendor_websocket_client.clone(),
+            vendor_transport: Arc::clone(&vendor_transport),
+            vendor_shapes: Arc::clone(&vendor_shapes),
+            vendor_resolver: Arc::clone(&vendor_resolver),
             vendor_plugins: vendor_plugins.clone(),
             platform_plugins,
             vendor_websocket_pool: Arc::new(crate::plugin::network::VendorWebSocketPool::default()),
@@ -530,14 +637,13 @@ impl Gateway {
                 vendor_plugins.clone(),
                 provider_catalog,
                 catalog_base_url,
-                vendor_http_client.clone(),
-                vendor_websocket_client.clone(),
+                vendor_transport,
+                vendor_resolver,
             ),
             provider_allowance_state: admin::provider_allowance::ProviderAllowanceState::new(
                 runtime_cache.clone(),
             ),
             allowance_samples,
-            vendor_client_cache: Arc::new(tokio::sync::RwLock::new([None, None])),
             model_cache,
             request_model_capture: crate::request_models::CaptureStore::default(),
             cache_affinity: router::cache_affinity::CacheAffinity::new(runtime_cache.clone()),
@@ -841,6 +947,8 @@ impl Gateway {
             retention: self.retention.clone(),
             observation: self.observation.clone(),
             turn_chain: Arc::clone(&self.turn_chains),
+            prompt_admissions: self.storage.prompt_admissions(),
+            atomic_state: self.storage.vendor_plugins().clone(),
             history_markers: Arc::clone(&self.history_markers),
             mappings: Arc::clone(&self.redaction.mappings),
             compaction: self.compaction.clone(),
@@ -988,28 +1096,7 @@ impl Gateway {
         self.artifact_store.as_ref()
     }
 
-    pub(crate) async fn vendor_client_snapshot(
-        &self,
-        use_proxy: bool,
-        options: &std::collections::BTreeMap<String, serde_json::Value>,
-    ) -> anyhow::Result<VendorClientSnapshot> {
-        let profile = stravia_vendor_sdk::transport::TransportProfile::from_options(options)
-            .map_err(anyhow::Error::msg)?;
-        let proxy = self.effective_vendor_proxy(use_proxy).await?;
-        let http = self.client_for_vendor(&proxy, &profile, false).await?;
-        let websocket = self.client_for_vendor(&proxy, &profile, true).await?;
-        Ok(VendorClientSnapshot {
-            http,
-            websocket,
-            websocket_reuse_identity: format!(
-                "{}:{}",
-                proxy.reuse_identity()?,
-                serde_json::to_string(&profile)?
-            ),
-        })
-    }
-
-    async fn effective_vendor_proxy(
+    pub(crate) async fn vendor_proxy_snapshot(
         &self,
         use_proxy: bool,
     ) -> anyhow::Result<EffectiveVendorProxy> {
@@ -1026,89 +1113,9 @@ impl Gateway {
             force_http1: config.force_http1,
         })
     }
-
-    async fn client_for_vendor(
-        &self,
-        proxy: &EffectiveVendorProxy,
-        profile: &stravia_vendor_sdk::transport::TransportProfile,
-        require_http1: bool,
-    ) -> anyhow::Result<reqwest::Client> {
-        let default_client = if require_http1 {
-            &self.vendor_websocket_client
-        } else {
-            &self.vendor_http_client
-        };
-        if matches!(proxy, EffectiveVendorProxy::Direct) && profile == &Default::default() {
-            return Ok(default_client.clone());
-        }
-        let proxy_http1 = matches!(
-            proxy,
-            EffectiveVendorProxy::Explicit {
-                force_http1: true,
-                ..
-            }
-        );
-        let force_http1 = require_http1 || profile.http1_only || proxy_http1;
-        let cache_key = serde_json::to_string(&(proxy.reuse_identity()?, profile, force_http1))?;
-        let slot = usize::from(force_http1);
-        let mut cache = self.vendor_client_cache.write().await;
-        if let Some(cached) = &cache[slot]
-            && cached.cache_key == cache_key
-        {
-            return Ok(cached.client.clone());
-        }
-
-        let mut builder =
-            super::vendor_transport::configure(vendor_http_client_builder(), profile, force_http1)?;
-        if force_http1 {
-            builder = builder.http1_only();
-        }
-        builder = builder.no_proxy();
-        if let EffectiveVendorProxy::Explicit {
-            proxy_url, bypass, ..
-        } = proxy
-        {
-            let config = crate::outbound_proxy::OutboundProxySettings {
-                url: proxy_url.clone(),
-                bypass: bypass.clone(),
-                force_http1,
-            };
-            builder = builder.proxy(config.reqwest_proxy()?);
-        }
-        let client = builder.build()?;
-
-        cache[slot] = Some(VendorClientCache {
-            cache_key,
-            client: client.clone(),
-        });
-        Ok(client)
-    }
 }
 
-/// 供应商 HTTP/2 连接探活间隔与应答超时。
-///
-/// 经 CONNECT 代理时，本机到代理的 TCP 始终存活，代理另一侧的链路静默失效后
-/// 没有任何 TCP 级信号；复用该连接的请求只能等到首 Token 超时，重试与换账号
-/// 又复用同一条连接。HTTP/2 PING 由源站端到端应答，是唯一能识别这种死连接的手段。
-/// 只在有活动流时探活；空闲连接由连接池的空闲超时回收。
-const VENDOR_H2_KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
-const VENDOR_H2_KEEP_ALIVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-fn vendor_http_client_builder() -> reqwest::ClientBuilder {
-    vendor_http_client_builder_with(VENDOR_H2_KEEP_ALIVE_INTERVAL, VENDOR_H2_KEEP_ALIVE_TIMEOUT)
-}
-
-fn vendor_http_client_builder_with(
-    keep_alive_interval: std::time::Duration,
-    keep_alive_timeout: std::time::Duration,
-) -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .http2_keep_alive_interval(keep_alive_interval)
-        .http2_keep_alive_timeout(keep_alive_timeout)
-}
-
-enum EffectiveVendorProxy {
+pub(crate) enum EffectiveVendorProxy {
     Direct,
     Explicit {
         proxy_url: String,
@@ -1118,7 +1125,28 @@ enum EffectiveVendorProxy {
 }
 
 impl EffectiveVendorProxy {
-    fn reuse_identity(&self) -> anyhow::Result<String> {
+    pub(crate) fn force_http1(&mut self) {
+        if let Self::Explicit { force_http1, .. } = self {
+            *force_http1 = true;
+        }
+    }
+
+    pub(crate) fn into_settings(self) -> crate::outbound_proxy::OutboundProxySettings {
+        match self {
+            Self::Direct => crate::outbound_proxy::OutboundProxySettings::default(),
+            Self::Explicit {
+                proxy_url,
+                bypass,
+                force_http1,
+            } => crate::outbound_proxy::OutboundProxySettings {
+                url: proxy_url,
+                bypass,
+                force_http1,
+            },
+        }
+    }
+
+    pub(crate) fn reuse_identity(&self) -> anyhow::Result<String> {
         let encoded = match self {
             Self::Direct => serde_json::to_vec(&"direct")?,
             Self::Explicit {
@@ -1154,37 +1182,150 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn vendor_http2_request_on_silently_dead_connection_fails_instead_of_hanging()
+    async fn installation_identity_survives_concurrent_initialization_and_restart()
     -> anyhow::Result<()> {
-        // 服务端接受连接后既不读也不写，等价于代理另一侧链路静默失效：
-        // 本机 TCP 仍然存活，只有 HTTP/2 PING 无应答能暴露它。
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let url = format!("http://{}/", listener.local_addr()?);
-        let server = tokio::spawn(async move {
-            let mut held = Vec::new();
-            while let Ok((stream, _)) = listener.accept().await {
-                held.push(stream);
-            }
-        });
-        let client = vendor_http_client_builder_with(
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_millis(100),
-        )
-        .http2_prior_knowledge()
-        .no_proxy()
-        .build()?;
+        let directory = tempfile::tempdir()?;
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(directory.path().join("identity.sqlite"))
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(options.clone())
+            .await?;
+        migrations::migrate_sqlite(&pool, None).await?;
+        let storage: DynStorage = Arc::new(SqliteStorage::from_pool(pool.clone()));
+        let first_dir = tempfile::tempdir()?;
+        let second_dir = tempfile::tempdir()?;
+        let first_config = GatewayConfig {
+            data_dir: first_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let second_config = GatewayConfig {
+            data_dir: second_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let (first, second) = tokio::join!(
+            Gateway::from_storage(first_config.clone(), Arc::clone(&storage)),
+            Gateway::from_storage(second_config, Arc::clone(&storage))
+        );
+        let first = first?;
+        let second = second?;
+        let identity = Arc::clone(&first.client_installation_id);
+        assert_eq!(identity, second.client_installation_id);
+        assert_eq!(
+            uuid::Uuid::parse_str(&identity)?.to_string(),
+            identity.as_ref()
+        );
+        first.shutdown().await;
+        second.shutdown().await;
+        drop(first);
+        drop(second);
+        drop(storage);
+        pool.close().await;
 
-        let outcome =
-            tokio::time::timeout(std::time::Duration::from_secs(5), client.get(&url).send()).await;
-        server.abort();
+        let reopened = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_with(options)
+            .await?;
+        let reopened_storage: DynStorage = Arc::new(SqliteStorage::from_pool(reopened.clone()));
+        let restarted =
+            Gateway::from_storage(first_config.clone(), Arc::clone(&reopened_storage)).await?;
+        assert_eq!(identity, restarted.client_installation_id);
+        restarted.shutdown().await;
+        drop(restarted);
 
-        let result =
-            outcome.expect("keep-alive must close the dead connection before the test deadline");
-        assert!(
-            result.is_err(),
-            "a dead connection cannot produce a response"
+        let isolated_storage: DynStorage = Arc::new(crate::storage::MemoryStorage::new(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        let isolated = Gateway::from_storage(first_config.clone(), isolated_storage).await?;
+        assert_ne!(identity, isolated.client_installation_id);
+        isolated.shutdown().await;
+        drop(isolated);
+
+        reopened_storage
+            .settings()
+            .set(CLIENT_INSTALLATION_ID_KEY, "corrupt")
+            .await?;
+        let error = match Gateway::from_storage(first_config, Arc::clone(&reopened_storage)).await {
+            Ok(_) => panic!("corrupt identity was accepted"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("invalid client installation identity"));
+        assert_eq!(
+            reopened_storage
+                .settings()
+                .get(CLIENT_INSTALLATION_ID_KEY)
+                .await?
+                .as_deref(),
+            Some("corrupt")
         );
         Ok(())
+    }
+
+    fn vendor_request(
+        gateway: &Gateway,
+        proxy: EffectiveVendorProxy,
+        http1: bool,
+        url: &str,
+    ) -> anyhow::Result<Arc<dyn stravia_vendor_runtime::HostHttpResponse>> {
+        use crate::plugin::{
+            VendorOperationTracker,
+            network::VendorNetwork,
+            permissions::{NetworkOrigin, NetworkPolicy},
+        };
+        use stravia_vendor_sdk::net::{HttpVersion, Options, Request};
+
+        let operation = VendorOperationTracker::default().begin("gateway-transport-test")?;
+        let origin = url::Url::parse(url)?.origin().ascii_serialization();
+        let network = VendorNetwork::new(
+            Arc::clone(&gateway.vendor_transport),
+            VendorNetworkConfig {
+                shapes: Arc::clone(&gateway.vendor_shapes),
+                resolver: Arc::clone(&gateway.vendor_resolver),
+            },
+            proxy.into_settings(),
+            NetworkPolicy::compile([NetworkOrigin::Exact(origin)])?,
+            operation,
+            stravia_runtime_contract::CancellationToken::new(),
+            "openai".into(),
+        );
+        let mut options = Options::new();
+        options.http_version(if http1 {
+            HttpVersion::Http1
+        } else {
+            HttpVersion::Auto
+        })?;
+        network
+            .http_start(Request::new("GET", url), options)
+            .map_err(|failure| anyhow::anyhow!(failure.message))
+    }
+
+    async fn vendor_text(
+        gateway: &Gateway,
+        proxy: EffectiveVendorProxy,
+        http1: bool,
+        url: &str,
+    ) -> anyhow::Result<String> {
+        let response = vendor_request(gateway, proxy, http1, url)?;
+        assert_eq!(
+            response
+                .status()
+                .await
+                .map_err(|failure| anyhow::anyhow!(failure.message))?,
+            200
+        );
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .read_body()
+            .await
+            .map_err(|failure| anyhow::anyhow!(failure.message))?
+        {
+            body.extend_from_slice(&chunk);
+        }
+        Ok(String::from_utf8(body)?)
     }
 
     #[tokio::test]
@@ -1262,36 +1403,27 @@ mod tests {
         .await?;
         let result = async {
             for http1 in [false, true] {
-                let direct = gateway
-                    .client_for_vendor(&EffectiveVendorProxy::Direct, &Default::default(), http1)
-                    .await?;
                 assert_eq!(
-                    direct.get(&origin).send().await?.text().await?,
+                    vendor_text(&gateway, EffectiveVendorProxy::Direct, http1, &origin).await?,
                     "direct origin"
                 );
-                let selected = gateway
-                    .client_for_vendor(
-                        &EffectiveVendorProxy::Explicit {
+                let selected = EffectiveVendorProxy::Explicit {
                             proxy_url: explicit.clone(),
                             bypass: String::new(),
                             force_http1: http1,
-                        },
-                        &Default::default(),
-                        http1,
-                    )
-                    .await?;
+                        };
                 assert_eq!(
-                    selected.get(&origin).send().await?.text().await?,
+                    vendor_text(&gateway, selected, http1, &origin).await?,
                     "explicit proxy"
                 );
-                let bypassed = gateway.client_for_vendor(&EffectiveVendorProxy::Explicit {
+                let bypassed = EffectiveVendorProxy::Explicit {
                     proxy_url: explicit.clone(), bypass: " NONMATCH.INVALID 127.0.0.1\tOTHER.INVALID; ".into(), force_http1: http1,
-                }, &Default::default(), http1).await?;
-                assert_eq!(bypassed.get(&origin).send().await?.text().await?, "direct origin");
-                let switched = gateway.client_for_vendor(&EffectiveVendorProxy::Explicit {
+                };
+                assert_eq!(vendor_text(&gateway, bypassed, http1, &origin).await?, "direct origin");
+                let switched = EffectiveVendorProxy::Explicit {
                     proxy_url: explicit.clone(), bypass: String::new(), force_http1: http1,
-                }, &Default::default(), http1).await?;
-                assert_eq!(switched.get(&origin).send().await?.text().await?, "explicit proxy");
+                };
+                assert_eq!(vendor_text(&gateway, switched, http1, &origin).await?, "explicit proxy");
             }
             let admin = gateway.admin();
             let saved = serde_json::to_string(&crate::outbound_proxy::OutboundProxySettings {
@@ -1302,10 +1434,10 @@ mod tests {
             let error = admin.set_setting(crate::outbound_proxy::SETTINGS_KEY, &invalid).await.unwrap_err();
             assert!(!error.to_string().contains("secret"));
             assert_eq!(admin.get_setting(crate::outbound_proxy::SETTINGS_KEY).await?, Some(saved));
-            assert_eq!(gateway.vendor_client_snapshot(true, &Default::default()).await?.http.get(&origin).send().await?.text().await?, "direct origin");
+            assert_eq!(vendor_text(&gateway, gateway.vendor_proxy_snapshot(true).await?, false, &origin).await?, "direct origin");
             admin.set_setting(crate::outbound_proxy::SETTINGS_KEY, r#"{"url":"","bypass":"","force_http1":false}"#).await?;
-            assert!(gateway.vendor_client_snapshot(true, &Default::default()).await.is_err());
-            assert_eq!(gateway.vendor_client_snapshot(false, &Default::default()).await?.http.get(&origin).send().await?.text().await?, "direct origin");
+            assert!(gateway.vendor_proxy_snapshot(true).await.is_err());
+            assert_eq!(vendor_text(&gateway, gateway.vendor_proxy_snapshot(false).await?, false, &origin).await?, "direct origin");
             anyhow::Ok(())
         }
         .await;
@@ -1360,29 +1492,30 @@ mod tests {
                     } else {
                         EffectiveVendorProxy::Direct
                     };
-                    let client = gateway
-                        .client_for_vendor(&proxy, &Default::default(), http1)
-                        .await?;
                     let request_url = if proxied {
                         "http://127.0.0.1:9/stream"
                     } else {
                         &origin
                     };
                     sender.send(Bytes::from_static(b"first")).await?;
-                    let mut response = client.get(request_url).send().await?;
-                    assert_eq!(response.chunk().await?.unwrap(), "first");
+                    let response = vendor_request(&gateway, proxy, http1, request_url)?;
+                    assert_eq!(response.status().await.unwrap(), 200);
+                    assert_eq!(response.read_body().await.unwrap().unwrap(), b"first");
                     let streamed = async {
                         for part in [b"second".as_slice(), b"third", b"after-300s"] {
-                            // 只推进 reqwest 的时钟；读取真实 socket 时恢复时钟，
+                            // 只推进传输层时钟；读取真实 socket 时恢复时钟，
                             // 避免 Tokio 空闲自动跳时把网络调度误判成超时。
                             tokio::time::pause();
                             tokio::time::advance(Duration::from_secs(101)).await;
                             tokio::time::resume();
                             sender.send(Bytes::copy_from_slice(part)).await?;
-                            assert_eq!(response.chunk().await?.unwrap().as_ref(), part);
+                            assert_eq!(
+                                response.read_body().await.unwrap().unwrap().as_slice(),
+                                part
+                            );
                         }
                         drop(sender);
-                        assert!(response.chunk().await?.is_none());
+                        assert!(response.read_body().await.unwrap().is_none());
                         anyhow::Ok(())
                     }
                     .await;
@@ -1475,16 +1608,8 @@ mod tests {
         .await?;
         let result = async {
             for _ in 0..2 {
-                let clients = gateway
-                    .vendor_client_snapshot(true, &Default::default())
-                    .await?;
-                let body = clients
-                    .http
-                    .get("http://127.0.0.1:9/vendor")
-                    .send()
-                    .await?
-                    .text()
-                    .await?;
+                let proxy = gateway.vendor_proxy_snapshot(true).await?;
+                let body = vendor_text(&gateway, proxy, false, "http://127.0.0.1:9/vendor").await?;
                 assert_eq!(body, "proxy response");
             }
             assert_eq!(connections.lock().await.len(), 1);

@@ -41,6 +41,7 @@ impl HookRuntime {
         context: SessionContext,
         request: &AiRequest,
         completeness: ContextCompleteness,
+        processed_input_items: usize,
     ) -> Result<InferenceRun, HookError> {
         let snapshot = self.plugin_snapshot.clone().unwrap_or_else(|| {
             self.platform_plugins
@@ -54,6 +55,11 @@ impl HookRuntime {
         let tools = self
             .tools
             .with_additional(crate::platform_plugins::snapshot_tools(&snapshot))?;
+        if processed_input_items > request.items.len() {
+            return Err(HookError::Runtime {
+                message: "processed input boundary is outside the request".into(),
+            });
+        }
         let sessions = hooks
             .iter()
             .map(|hook| {
@@ -92,6 +98,7 @@ impl HookRuntime {
             sessions,
             route: None,
             round: 0,
+            processed_input_items,
             tools,
             exposed_tools: HashMap::new(),
             exposed_tool_specs: HashMap::new(),
@@ -126,6 +133,7 @@ pub(crate) struct InferenceRun {
     sessions: Vec<RuntimeSession>,
     route: Option<RouteContext>,
     pub(super) round: u32,
+    processed_input_items: usize,
     tools: PlatformToolRegistry,
     exposed_tools: HashMap<String, ToolId>,
     exposed_tool_specs: HashMap<String, ToolSpec>,
@@ -205,7 +213,22 @@ impl InferenceRun {
             cancellation,
         )
     }
-    pub async fn on_request(&mut self, request: &mut AiRequest) -> Result<HookControl, HookError> {
+    pub(crate) async fn on_request_with_provenance(
+        &mut self,
+        request: &mut AiRequest,
+    ) -> Result<RequestHookOutcome, HookError> {
+        if self.processed_input_items > request.items.len() {
+            return Err(HookError::Runtime {
+                message: "processed input prefix was removed without a history rewrite".into(),
+            });
+        }
+        if self.round > 0
+            && let Some(current) = &mut self.current
+        {
+            Arc::make_mut(current)
+                .update_from_request(request, ContextCompleteness::from_request(request));
+        }
+        let mut history_edits = Vec::new();
         for index in 0..self.sessions.len() {
             let accepts = self.sessions[index]
                 .descriptor
@@ -231,6 +254,7 @@ impl InferenceRun {
                     .expect("Request consumer has a snapshot"),
                 read_scope: self.read_scope,
                 current: &hook_view,
+                input_start: self.processed_input_items,
                 context: self
                     .current
                     .as_deref()
@@ -247,12 +271,13 @@ impl InferenceRun {
                 self.cancellation.clone(),
             )
             .await?;
-            let control = apply_request_actions(
+            let outcome = apply_request_actions(
                 &runtime_session.descriptor.id,
                 request,
                 self.current
                     .as_mut()
                     .expect("Request consumer has a snapshot"),
+                self.processed_input_items,
                 &mut ToolExposure {
                     tools: &mut self.exposed_tools,
                     specs: &mut self.exposed_tool_specs,
@@ -261,17 +286,35 @@ impl InferenceRun {
                 &self.tools,
                 batch,
             )?;
+            if outcome
+                .history_edits
+                .iter()
+                .any(|edit| matches!(edit, RequestHistoryEdit::ReplaceContext))
+            {
+                self.processed_input_items = 0;
+            }
+            history_edits.extend(outcome.history_edits);
             self.completeness = self
                 .current
                 .as_ref()
                 .expect("Request consumer has a snapshot")
                 .completeness
                 .clone();
-            if !matches!(control, HookControl::Continue) {
-                return Ok(control);
+            if !matches!(outcome.control, HookControl::Continue) {
+                self.processed_input_items = request.items.len();
+                return Ok(RequestHookOutcome {
+                    control: outcome.control,
+                    history_edits,
+                    refresh_context: false,
+                });
             }
         }
-        Ok(HookControl::Continue)
+        self.processed_input_items = request.items.len();
+        Ok(RequestHookOutcome {
+            control: HookControl::Continue,
+            history_edits,
+            refresh_context: false,
+        })
     }
 
     #[cfg(test)]

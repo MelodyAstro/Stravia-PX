@@ -18,12 +18,24 @@ impl AgentRunner {
             run_lifecycles: Arc::from([]),
             tool_authorizer: None,
             turns,
+            atomic_state_store: None,
+            prompt_admissions: None,
             artifacts: None,
             output_validators: Arc::new(HashMap::new()),
             capability_model_authorizations: Arc::new(HashMap::new()),
             hooks: None,
             platform_plugins: None,
         })
+    }
+
+    pub(crate) fn with_atomic_state_store(
+        mut self,
+        store: crate::plugin::PluginStore,
+        admissions: Arc<dyn crate::storage::PromptAdmissionStore>,
+    ) -> Self {
+        self.atomic_state_store = Some(store);
+        self.prompt_admissions = Some(admissions);
+        self
     }
 
     pub(crate) fn with_hook_runtime(mut self, hooks: HookRuntime) -> Self {
@@ -212,10 +224,24 @@ impl AgentRunner {
         observation: Option<crate::interaction_observation::RunObserver>,
     ) -> Result<AgentResult, AgentRunError> {
         let cancellation = input.cancellation.clone();
+        let history_epoch = match &self.prompt_admissions {
+            Some(store) => Some(store.history_epoch().await.map_err(|error| {
+                AgentRunError::new("atomic_state_unavailable", error.to_string())
+            })?),
+            None => None,
+        };
         let ParentAgentContext {
             mut transcript,
+            processed_input_items,
             snapshot: parent_snapshot,
             root_turn_id,
+            state_checkpoint_id: parent_checkpoint_id,
+            context_window_id: parent_window_id,
+            context_window_index: parent_window_index,
+            user_prompt_index: parent_prompt_index,
+            user_turn_index: parent_user_turn_index,
+            client_conversation_id: parent_conversation_id,
+            client_conversation_created_at_ms: parent_conversation_created_at_ms,
         } = tokio::select! {
             _ = events.closed() => {
                 cancellation.cancel();
@@ -231,6 +257,20 @@ impl AgentRunner {
                 &input.principal,
                 input.parent_turn_id.as_ref(),
             ) => result?,
+        };
+        let user_prompt_index = parent_prompt_index.checked_add(1).ok_or_else(|| {
+            AgentRunError::new("parent_turn_invalid", "Agent prompt index overflow")
+        })?;
+        let (context_window_id, context_window_index) = if root_turn_id.is_none() {
+            let window = crate::generation_chain::VirtualWindow::root();
+            (Some(window.id), Some(window.index))
+        } else {
+            (parent_window_id, parent_window_index)
+        };
+        let mut user_turn_index = if root_turn_id.is_none() {
+            Some(1)
+        } else {
+            advance_user_turn(parent_user_turn_index)?
         };
         let (record, model_id, thinking_level) = if let Some(resolved) = resolved {
             if input.parent_turn_id.is_some() {
@@ -357,6 +397,63 @@ impl AgentRunner {
             .model_specs(&record.spec.tools)
             .map_err(|error| AgentRunError::new(error.code, error.message))?;
         let turn_id = AgentTurnId::agent();
+        let admission_id = uuid::Uuid::new_v4();
+        let user_prompt_id = admission_id.to_string();
+        let user_prompt_created_at_ms = chrono::Utc::now().timestamp_millis();
+        let memory_history_guard = match self
+            .prompt_admissions
+            .as_ref()
+            .and_then(|store| store.memory_history_lock())
+        {
+            Some(lock) => Some(lock.read_owned().await),
+            None => None,
+        };
+        let atomic_guard = if let Some(store) = &self.atomic_state_store {
+            let epoch = history_epoch.ok_or_else(|| {
+                AgentRunError::new(
+                    "atomic_state_unavailable",
+                    "Agent history epoch unavailable",
+                )
+            })?;
+            if let Some(admissions) = &self.prompt_admissions {
+                let current = admissions.history_epoch().await.map_err(|error| {
+                    AgentRunError::new("atomic_state_unavailable", error.to_string())
+                })?;
+                if current != epoch {
+                    return Err(AgentRunError::new(
+                        "atomic_state_unavailable",
+                        "Agent history was cleared",
+                    ));
+                }
+            }
+            let guard = crate::plugin::atomic_lease::AtomicLeaseGuard::fork_at_epoch(
+                store.clone(),
+                input.principal.continuation_key(),
+                admission_id,
+                parent_checkpoint_id,
+                epoch,
+            )
+            .await
+            .map_err(|error| AgentRunError::new("atomic_state_unavailable", error.to_string()))?;
+            cancellation.cancel_with(&guard.cancellation());
+            Some(guard)
+        } else {
+            None
+        };
+        drop(memory_history_guard);
+        let result = async {
+        let atomic_conversation = atomic_guard.as_ref().map(|guard| {
+            crate::plugin::execution::AtomicConversationContext {
+                principal: input.principal.continuation_key(),
+                admission_id,
+                atomic_lease_id: guard.lease_id(),
+            }
+        });
+        let (client_conversation_id, client_conversation_created_at_ms) = if root_turn_id.is_none() {
+            (Some(user_prompt_id.clone()), Some(user_prompt_created_at_ms))
+        } else {
+            (parent_conversation_id, parent_conversation_created_at_ms)
+        };
         // Child turns append to the same prompt prefix; keep provider cache routing on the root
         // identity while independent Agent chains remain isolated.
         let generation_session_id = root_turn_id.as_ref().unwrap_or(&turn_id);
@@ -401,6 +498,8 @@ impl AgentRunner {
             ) => result?,
         };
         content.extend(artifact_blocks);
+        let mut current_input_gap = transcript.len();
+        let mut pending_input = true;
         transcript.push(AiItem {
             role: Role::User,
             content: if content.len() == 1 {
@@ -412,11 +511,11 @@ impl AgentRunner {
             tool_call_id: None,
             meta: None,
         });
-        let mut model_transcript = self
+        transcript = self
             .hydrate_transcript(&input.principal, &transcript)
             .await?;
         let model_instructions = model_instructions(&record.spec);
-        let mut initial_request = AiRequest::new(&model_id, model_transcript.clone());
+        let mut initial_request = AiRequest::new(&model_id, transcript.clone());
         initial_request.instructions = Some(model_instructions.clone());
         initial_request.reasoning.level = thinking_level;
         initial_request.tools = (!allowed_tools.is_empty()).then_some(allowed_tools.clone());
@@ -444,6 +543,7 @@ impl AgentRunner {
                     },
                     &initial_request,
                     ContextCompleteness::Full,
+                    processed_input_items,
                 )
             })
             .transpose()
@@ -488,7 +588,12 @@ impl AgentRunner {
             {
                 partial = true;
                 finalizing = true;
-                append_finalization_instruction(&mut transcript, &mut model_transcript);
+                if !pending_input {
+                    current_input_gap = transcript.len();
+                    pending_input = true;
+                }
+                append_finalization_instruction(&mut transcript);
+                user_turn_index = advance_user_turn(user_turn_index)?;
             }
             model_turns += 1;
             send_event(
@@ -499,7 +604,7 @@ impl AgentRunner {
             )
             .await?;
 
-            let mut request = AiRequest::new(&model_id, model_transcript.clone());
+            let mut request = AiRequest::new(&model_id, std::mem::take(&mut transcript));
             request.instructions = Some(model_instructions.clone());
             request.reasoning.level = thinking_level;
             crate::generation_chain::set_generation_session_id(
@@ -520,13 +625,16 @@ impl AgentRunner {
             };
             request.tools = (!turn_tools.is_empty()).then_some(turn_tools);
             let fixed_model = request.model.clone();
+            let mut projected_input_gap = Some(current_input_gap);
             let fixed_tools = request.tools.clone();
             let hook_response = if let Some(hooks) = &hooks {
                 let mut hooks = hooks.lock().await;
-                let control = hooks
-                    .on_request(&mut request)
+                let outcome = hooks
+                    .on_request_with_provenance(&mut request)
                     .await
                     .map_err(|error| AgentRunError::new("hook_policy_error", error.to_string()))?;
+                outcome.project_history_gaps(std::slice::from_mut(&mut projected_input_gap));
+                let control = outcome.control;
                 if hooks.has_exposed_tools()
                     || request.model != fixed_model
                     || request.tools != fixed_tools
@@ -549,6 +657,12 @@ impl AgentRunner {
             } else {
                 None
             };
+            // 持久化实际处理结果，而不是下次重新执行 Hook；Artifact 仍是
+            // 受主体约束的引用，不把模型发送时展开的媒体字节写回历史。
+            transcript.clone_from(&request.items);
+            if let Some(gap) = projected_input_gap {
+                current_input_gap = gap;
+            }
             let turn_deadline = if finalizing {
                 deadline
             } else {
@@ -560,13 +674,29 @@ impl AgentRunner {
                     publication: None,
                 })
             } else {
+                let mut source_request = Arc::new(request.clone());
+                Arc::make_mut(&mut source_request).normalize_parameters();
+                let candidate = if projected_input_gap.is_some() {
+                    context_window_id.zip(context_window_index).and_then(|(id, index)| {
+                        crate::generation_chain::history_boundary_candidate(
+                            admission_id,
+                            crate::generation_chain::VirtualWindow { id, index },
+                            &source_request,
+                            current_input_gap,
+                        )
+                    })
+                } else {
+                    None
+                };
+                let boundary_gaps = candidate.as_ref().map(|_| (0..=source_request.items.len()).collect());
+                pending_input = false;
                 use tracing::Instrument as _;
                 let span = tracing::info_span!(target: "stravia::perf", "agent.model_turn.execute", status = tracing::field::Empty);
                 let result = self
                     .execute_model_turn(
                         {
                             let mut turn_input =
-                                TurnInput::new(input.principal.clone(), request.clone())
+                                TurnInput::new(input.principal.clone(), Arc::clone(&source_request))
                                     .with_execution(
                                         cancellation.clone(),
                                         stravia_runtime_contract::Deadline::fixed(turn_deadline),
@@ -574,6 +704,22 @@ impl AgentRunner {
                             if let Some(observer) = observation.as_ref() {
                                 turn_input = turn_input.with_observer(observer.for_agent_turn());
                             }
+                            turn_input.history_boundary_source = boundary_gaps.as_ref().map(|_| Arc::clone(&source_request));
+                            turn_input.history_boundary_gaps = boundary_gaps;
+                            turn_input.history_boundary_candidate = candidate;
+                            turn_input.atomic_conversation = atomic_conversation.clone();
+                            turn_input.atomic_lease = atomic_guard.clone();
+                            turn_input.user_prompt_index = Some(user_prompt_index);
+                            turn_input.dialogue_prompt_index = Some(user_prompt_index);
+                            turn_input.context_window_id = context_window_id;
+                            turn_input.context_window_index = context_window_index;
+                            turn_input.user_turn_index = user_turn_index;
+                            turn_input.user_prompt_id = Some(user_prompt_id.clone());
+                            turn_input.user_prompt_created_at_ms = Some(user_prompt_created_at_ms);
+                            turn_input.logical_turn_id = Some(admission_id);
+                            turn_input.logical_turn_started_at_ms = Some(user_prompt_created_at_ms);
+                            turn_input.client_conversation_id = client_conversation_id.clone();
+                            turn_input.client_conversation_created_at_ms = client_conversation_created_at_ms;
                             turn_input.root_request = crate::rpm::current_root_request();
                             if capability_authorization.is_some() {
                                 turn_input = turn_input
@@ -599,7 +745,12 @@ impl AgentRunner {
                 {
                     partial = true;
                     finalizing = true;
-                    append_finalization_instruction(&mut transcript, &mut model_transcript);
+                    if !pending_input {
+                        current_input_gap = transcript.len();
+                        pending_input = true;
+                    }
+                    append_finalization_instruction(&mut transcript);
+                    user_turn_index = advance_user_turn(user_turn_index)?;
                     continue;
                 }
                 result => result?,
@@ -653,7 +804,6 @@ impl AgentRunner {
                 &format!("{turn_id}:{model_turns}"),
                 crate::model_turn::support::explicit_chat_reasoning_field(&response),
             );
-            model_transcript.extend_from_slice(&transcript[output_start..]);
 
             let response_tool_calls = response.tool_calls().cloned().collect::<Vec<_>>();
             if !response_tool_calls.is_empty() {
@@ -685,7 +835,12 @@ impl AgentRunner {
                 {
                     partial = true;
                     finalizing = true;
-                    append_finalization_instruction(&mut transcript, &mut model_transcript);
+                    if !pending_input {
+                        current_input_gap = transcript.len();
+                        pending_input = true;
+                    }
+                    append_finalization_instruction(&mut transcript);
+                    user_turn_index = advance_user_turn(user_turn_index)?;
                     continue;
                 }
                 let results = self
@@ -705,8 +860,11 @@ impl AgentRunner {
                     })
                     .await?;
                 tool_calls = next_call_count;
-                transcript.extend(results.clone());
-                model_transcript.extend(results);
+                if !pending_input {
+                    current_input_gap = transcript.len();
+                    pending_input = true;
+                }
+                transcript.extend(results);
                 continue;
             }
 
@@ -796,13 +954,31 @@ impl AgentRunner {
                                 )
                                 .await?;
                         }
+                        let state_checkpoint_id = if let Some(guard) = &atomic_guard {
+                            let checkpoint = uuid::Uuid::new_v4();
+                            guard.checkpoint(checkpoint).await.map_err(|error| AgentRunError::new(
+                                "atomic_state_unavailable", error.to_string(),
+                            ))?;
+                            Some(checkpoint)
+                        } else {
+                            None
+                        };
                         self.commit_turn(TurnCommitContext {
                             input: &input,
                             record: &record,
                             model_id: &model_id,
                             thinking_level,
                             turn_id: &turn_id,
+                            state_checkpoint_id,
+                            context_window_id,
+                            context_window_index,
+                            user_prompt_id: &user_prompt_id,
+                            user_prompt_created_at_ms,
+                            user_turn_index,
+                            client_conversation_id: client_conversation_id.as_deref(),
+                            client_conversation_created_at_ms,
                             transcript: &transcript,
+                            processed_input_items: output_start,
                             result: &result,
                         })
                         .await?;
@@ -823,11 +999,26 @@ impl AgentRunner {
                         "Your answer did not satisfy the required output schema: {}. Return only corrected JSON.",
                         error.message
                     ));
-                    transcript.push(instruction.clone());
-                    model_transcript.push(instruction);
+                    if !pending_input {
+                        current_input_gap = transcript.len();
+                        pending_input = true;
+                    }
+                    transcript.push(instruction);
+                    user_turn_index = advance_user_turn(user_turn_index)?;
                 }
                 Err(error) => return Err(error),
             }
+        }
+        }.await;
+        match (
+            result,
+            atomic_guard.as_ref().and_then(|guard| guard.failure()),
+        ) {
+            (Err(_), Some(failure)) => Err(AgentRunError::new(
+                "atomic_state_unavailable",
+                failure.to_string(),
+            )),
+            (result, _) => result,
         }
     }
 
@@ -919,12 +1110,22 @@ impl AgentRunner {
                 principal: commit.input.principal.clone(),
                 kind: TurnNodeKind::Agent,
                 payload_version: 1,
+                atomic_checkpoint_id: commit.state_checkpoint_id.map(|id| id.to_string()),
                 payload: serde_json::json!({
+                    "state_checkpoint_id": commit.state_checkpoint_id,
+                    "context_window_id": commit.context_window_id,
+                    "context_window_index": commit.context_window_index,
                     "definition_id": commit.record.spec.id.as_str(),
                     "definition_revision": commit.record.spec.revision,
                     "model_id": commit.model_id,
                     "thinking_level": commit.thinking_level,
+                    "user_prompt_id": commit.user_prompt_id,
+                    "user_prompt_created_at_ms": commit.user_prompt_created_at_ms,
+                    "user_turn_index": commit.user_turn_index,
+                    "client_conversation_id": commit.client_conversation_id,
+                    "client_conversation_created_at_ms": commit.client_conversation_created_at_ms,
                     "transcript": commit.transcript,
+                    "processed_input_items": commit.processed_input_items,
                     "completion": commit.result.completion,
                     "output": commit.result.output,
                     "usage": commit.result.usage,
@@ -935,7 +1136,17 @@ impl AgentRunner {
                 reusable_prefix: None,
             })
             .await
-            .map_err(|error| AgentRunError::new("turn_commit_failed", error.to_string()))?;
+            .map_err(|error| {
+                let code = if matches!(
+                    error,
+                    stravia_runtime_contract::turn_chain::TurnCommitError::AtomicStateUnavailable
+                ) {
+                    "atomic_state_unavailable"
+                } else {
+                    "turn_commit_failed"
+                };
+                AgentRunError::new(code, error.to_string())
+            })?;
         Ok(())
     }
 }
@@ -951,7 +1162,16 @@ struct TurnCommitContext<'a> {
     model_id: &'a str,
     thinking_level: Option<stravia_runtime_contract::thinking::ThinkingLevel>,
     turn_id: &'a AgentTurnId,
+    state_checkpoint_id: Option<uuid::Uuid>,
+    context_window_id: Option<uuid::Uuid>,
+    context_window_index: Option<u64>,
+    user_prompt_id: &'a str,
+    user_prompt_created_at_ms: i64,
+    user_turn_index: Option<u64>,
+    client_conversation_id: Option<&'a str>,
+    client_conversation_created_at_ms: Option<i64>,
     transcript: &'a [AiItem],
+    processed_input_items: usize,
     result: &'a AgentResult,
 }
 
@@ -965,15 +1185,21 @@ pub(super) fn model_instructions(spec: &AgentDefinitionSpec) -> String {
     )
 }
 
-fn append_finalization_instruction(
-    transcript: &mut Vec<AiItem>,
-    model_transcript: &mut Vec<AiItem>,
-) {
+fn advance_user_turn(index: Option<u64>) -> Result<Option<u64>, AgentRunError> {
+    index
+        .map(|index| {
+            index.checked_add(1).ok_or_else(|| {
+                AgentRunError::new("parent_turn_invalid", "Agent user turn index overflow")
+            })
+        })
+        .transpose()
+}
+
+fn append_finalization_instruction(transcript: &mut Vec<AiItem>) {
     let instruction = user_instruction(
         "The working budget is exhausted. Return the best possible final answer now without calling tools.",
     );
-    transcript.push(instruction.clone());
-    model_transcript.push(instruction);
+    transcript.push(instruction);
 }
 
 fn user_instruction(text: impl Into<String>) -> AiItem {

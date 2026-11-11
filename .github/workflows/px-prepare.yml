@@ -1,0 +1,41 @@
+name: Strinova source preparation
+on:
+  workflow_dispatch:
+  push:
+    branches: ['px/v0.6.5-strinova']
+    paths: ['.github/workflows/px-prepare.yml', 'Cargo.toml', 'Cargo.lock']
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.99.1'
+          components: rustfmt
+          cache: false
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-patch-crate
+          key: patch-crate-0.1.13-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1
+      - uses: go-task/setup-task@v2
+        with:
+          version: '3.52.0'
+      - run: task prepare:crates
+      - name: Resolve lockfile with Cargo and format Rust
+        run: |
+          cargo metadata --no-deps --format-version 1 > /dev/null
+          cargo fmt --all
+          mkdir -p prepared
+          git diff --binary -- Cargo.lock Cargo.toml backend > prepared/source.patch
+          cp Cargo.lock prepared/Cargo.lock
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strinova-prepared-source-${{ github.sha }}
+          path: prepared/*
+          retention-days: 7

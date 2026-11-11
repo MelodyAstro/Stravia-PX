@@ -15,6 +15,24 @@ use stravia_runtime_contract::protocol::ids::{
 use stravia_runtime_contract::protocol::ir::{AiItem, AiRequest};
 
 #[test]
+fn generation_session_affinity_isolates_principal_target_and_root() {
+    let owner = stravia_runtime_contract::Principal::new("owner");
+    let other = stravia_runtime_contract::Principal::new("other");
+    let affinity = super::generation_session_affinity(&owner, "provider:model", "root-one");
+    for (principal, target, root) in [
+        (&other, "provider:model", "root-one"),
+        (&owner, "provider:other-model", "root-one"),
+        (&owner, "other-provider:model", "root-one"),
+        (&owner, "provider:model", "root-two"),
+    ] {
+        assert_ne!(
+            affinity,
+            super::generation_session_affinity(principal, target, root)
+        );
+    }
+}
+
+#[test]
 fn parent_session_transport_affinity_matches_real_parent_and_is_scoped() {
     let principal = stravia_runtime_contract::Principal::new("owner");
     let other = stravia_runtime_contract::Principal::new("other");
@@ -298,6 +316,83 @@ fn rejected_protected_reasoning_strips_only_foreign_and_unknown_once() {
     ));
     assert_eq!(stage, 0);
     assert_eq!(signatures(&request), vec!["own-signature"]);
+}
+
+#[test]
+fn reasoning_removal_projects_duplicate_boundary_gaps_without_collapsing_ids() {
+    let source = ThinkingSource {
+        namespace: "target".into(),
+        protocol: Some(ANTHROPIC_MESSAGES_2023_06_01.into()),
+        actual_model: "model".into(),
+        target_id: "target".into(),
+        authority: Some("authority".into()),
+        issued: Vec::new(),
+    };
+    let mut removed = AiItem::thinking("", Some("foreign".into()));
+    removed.role = stravia_runtime_contract::protocol::ir::Role::Assistant;
+    let duplicate = AiItem::output_text("same");
+    let mut request = AiRequest::new("model", vec![duplicate.clone(), removed, duplicate]);
+    let mut map = crate::model_turn::HistoryBoundaryMap {
+        version: 1,
+        window_id: "window".into(),
+        coverage: "complete".into(),
+        boundaries: [("before", 1), ("after", 2), ("end", 3)]
+            .into_iter()
+            .map(|(id, item_index)| crate::model_turn::HistoryBoundary {
+                id: id.into(),
+                item_index,
+            })
+            .collect(),
+        current_boundary_id: "end".into(),
+    };
+    assert!(super::strip_rejected_protected_reasoning_with_boundaries(
+        &mut request,
+        &mut 0,
+        &source,
+        Some(&mut map),
+    ));
+    assert_eq!(request.items.len(), 2);
+    assert_eq!(
+        map.boundaries
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.item_index))
+            .collect::<Vec<_>>(),
+        vec![("before", 1), ("after", 1), ("end", 2)]
+    );
+}
+
+#[test]
+fn continuation_suffix_projection_preserves_full_fallback_boundaries() {
+    let full = crate::model_turn::HistoryBoundaryMap {
+        version: 1,
+        window_id: "window".into(),
+        coverage: "complete".into(),
+        boundaries: [("first", 1), ("at_split", 2), ("current", 4)]
+            .into_iter()
+            .map(|(id, item_index)| crate::model_turn::HistoryBoundary {
+                id: id.into(),
+                item_index,
+            })
+            .collect(),
+        current_boundary_id: "current".into(),
+    };
+    let mut suffix = full.clone();
+    suffix.retain_suffix(2);
+    assert_eq!(
+        suffix
+            .boundaries
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.item_index))
+            .collect::<Vec<_>>(),
+        vec![("current", 2)]
+    );
+    assert_eq!(
+        full.boundaries
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.item_index))
+            .collect::<Vec<_>>(),
+        vec![("first", 1), ("at_split", 2), ("current", 4)]
+    );
 }
 
 #[test]

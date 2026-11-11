@@ -2,6 +2,7 @@ mod allowance;
 mod auth;
 mod codex;
 mod compaction;
+mod lite_history;
 mod media_generation;
 mod messages {
     include!(concat!(env!("OUT_DIR"), "/messages.rs"));
@@ -31,7 +32,7 @@ const CHANNEL: &str = "codex";
 /// model availability for `/models` and `/responses` by exact client version
 /// rather than the catalog's `minimal_client_version`; an older pin silently
 /// hides newer SKUs such as gpt-6-sol and gpt-6.1-sol from discovery.
-const CLIENT_VERSION: &str = "0.162.1";
+const CLIENT_VERSION: &str = "0.167.0";
 const MAX_ERROR_BODY: usize = 256 * 1024;
 const MAX_MODELS_BODY: usize = 4 * 1024 * 1024;
 
@@ -47,6 +48,7 @@ pub fn descriptor() -> VendorDescriptor {
         Capability::ConfigValidation,
     ]);
     VendorDescriptor {
+        egress_shapes: Vec::new(),
         vendor_id: VENDOR_ID.into(),
         version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.responses.3"))
             .expect("package version must be valid semver"),
@@ -284,6 +286,13 @@ fn infer(
     let model = required_model(&provider)?;
     require_codex_protocol(&provider)?;
     normalize_request(model, &mut request);
+    if operation == Operation::Compact {
+        // V2 使用同一份 typed IR：缺省摘要指令是实时 base instructions，
+        // 触发器位于 input 末尾；不发送 V1 context_management 控制。
+        stravia_protocol_codec::codec::compaction::prepare_responses_compaction_request(
+            &mut request,
+        );
+    }
 
     let protocol = OPEN_RESPONSES_2026_04_24;
     let preserve_upstream_errors = operation == Operation::Infer
@@ -301,16 +310,19 @@ fn infer(
             upstream_status: None,
         });
     }
-    let mut session = codex::NativeSession::new(&provider);
+    let body_operation = if operation == Operation::Compact {
+        codex::BodyOperation::Compaction
+    } else if websocket {
+        codex::BodyOperation::WebSocket
+    } else {
+        codex::BodyOperation::Http
+    };
+    let mut session = codex::NativeSession::new(&provider, body_operation);
     session.resolve_identity(host, &provider)?;
-    let attempt = prepare_attempt(
-        &provider,
-        &protocol.to_string(),
-        request,
-        operation,
-        websocket,
-        &session,
-    )?;
+    let mut attempt = prepare_attempt(&protocol.to_string(), request, &mut session, &provider)?;
+    if !websocket {
+        lite_history::stabilize(&session, &mut attempt.body)?;
+    }
     if websocket {
         return codex::infer_websocket(
             host,
@@ -322,37 +334,25 @@ fn infer(
         .map(Box::new)
         .map(OperationOutput::Infer);
     }
-    let Attempt {
-        body,
-        headers: codec_headers,
-        egress_path,
-        retained,
-    } = attempt;
+    let Attempt { body, egress_path } = attempt;
     let path = strip_v1_prefix(&egress_path).to_owned();
-    let mut headers = codec_headers;
-    headers.retain(|(name, _)| {
-        !name.eq_ignore_ascii_case("content-type") && !name.eq_ignore_ascii_case("accept")
-    });
-    headers.push(("content-type".into(), "application/json".into()));
-    headers.push((
-        "accept".into(),
-        "text/event-stream, application/json".into(),
-    ));
-    codex::append_runtime_headers(
-        &provider,
-        &body,
-        &session,
-        codex::BodyOperation::Http,
-        &mut headers,
-    )?;
+    let mut headers = vec![
+        ("accept".into(), "text/event-stream".into()),
+        ("content-type".into(), "application/json".into()),
+    ];
+    codex::append_runtime_headers(&provider, &body, &session, &mut headers)?;
     host.emit_started()?;
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: "POST".into(),
-        url: endpoint(&provider.base_url, &path),
-        headers,
-        body: serde_json::to_vec(&body)
-            .map_err(|_| invalid("Codex request could not be encoded"))?,
-    })?;
+    let response = codex::start_responses_http(
+        host,
+        &provider,
+        stravia_vendor_sdk::net::Request {
+            method: "POST".into(),
+            url: endpoint(&provider.base_url, &path),
+            headers: codex::http_fields(headers),
+            body: serde_json::to_vec(&codex::WireBody(&body))
+                .map_err(|_| invalid("Codex request could not be encoded"))?,
+        },
+    )?;
     match operation {
         Operation::Infer => {
             // Codex 流式请求的成功响应按 SSE 解码，不依赖上游是否返回 Content-Type。
@@ -382,10 +382,8 @@ fn infer(
             decoded.map(Box::new).map(OperationOutput::Infer)
         }
         Operation::Compact => {
-            common::preserve_compaction_upstream_errors(host, response, |response| {
-                compaction::decode(response, retained)
-            })
-            .map(OperationOutput::Compact)
+            common::preserve_compaction_upstream_errors(host, response, compaction::decode)
+                .map(OperationOutput::Compact)
         }
         _ => Err(invalid(
             "Codex codec returned an unexpected operation result",
@@ -397,10 +395,7 @@ fn infer(
 /// from the same native session for every dispatch.
 struct Attempt {
     body: Value,
-    /// Codec headers for the HTTP wire; empty for WebSocket.
-    headers: Vec<(String, String)>,
     egress_path: String,
-    retained: Vec<Value>,
 }
 
 fn normalize_request(model: &str, request: &mut AiRequest) {
@@ -418,77 +413,32 @@ fn requests_previous_response(request: &AiRequest) -> bool {
 }
 
 fn prepare_attempt(
-    provider: &ProviderSnapshot,
     protocol: &str,
     mut request: AiRequest,
-    operation: Operation,
-    websocket: bool,
-    session: &codex::NativeSession,
+    session: &mut codex::NativeSession,
+    provider: &ProviderSnapshot,
 ) -> Result<Attempt, PluginError> {
     let native_tools = codex::encode_tools(&request, codex::BodyOperation::Http);
     // 原生工具只编码一次；通用 codec 仍负责历史与统一控制的协议投影。
     request.tools = None;
     request.parameters.native_tools.clear();
-    let encoded = common::encode_inference_request(protocol, request)?;
+    let encoded = if session.uses_lite_history() {
+        let (encoded, gaps) =
+            stravia_protocol_codec::codec::open_responses::adapter::OpenResponses20260424
+                .encode_request_with_input_gaps(request)
+                .map_err(common::map_request_transform_error)?;
+        session.history_boundaries = lite_history::project_boundaries(provider, session, &gaps)?;
+        encoded
+    } else {
+        common::encode_inference_request(protocol, request)?
+    };
     let mut body = encoded.body;
     body["tools"] = native_tools.into();
-    let headers = if websocket {
-        Vec::new()
-    } else {
-        common::header_pairs(&encoded.headers)?
-    };
-    prepare_responses_body(provider, &mut body)?;
-    if websocket {
-        codex::prepare_operation_body(&mut body, codex::BodyOperation::WebSocket)?;
-    } else {
-        codex::prepare_body(&mut body)?;
-    }
-    // 独立压缩与官方客户端一致：普通流式 /responses + 末尾 compaction_trigger。
-    let retained = if operation == Operation::Compact {
-        compaction::arm(&mut body)?
-    } else {
-        Vec::new()
-    };
-    session.apply_body(&mut body);
+    session.project_body(&mut body)?;
     Ok(Attempt {
         body,
-        headers,
         egress_path: encoded.path,
-        retained,
     })
-}
-
-fn prepare_responses_body(
-    provider: &ProviderSnapshot,
-    body: &mut Value,
-) -> Result<(), PluginError> {
-    let object = body
-        .as_object_mut()
-        .ok_or_else(|| invalid("Codex Responses request body must be an object"))?;
-    let include = object
-        .entry("include")
-        .or_insert_with(|| Value::Array(Vec::new()));
-    if include.is_null() {
-        *include = Value::Array(Vec::new());
-    }
-    let include = include
-        .as_array_mut()
-        .ok_or_else(|| invalid("Codex Responses include must be an array"))?;
-    // Codex CLI 不请求 logprobs；订阅推理端点会拒绝公共 Responses 派生的该项。
-    include.retain(|value| value.as_str() == Some("reasoning.encrypted_content"));
-    if !object.contains_key("prompt_cache_key")
-        && let Some(affinity) = provider
-            .operation_metadata
-            .get("transport_affinity")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-    {
-        object.insert(
-            "prompt_cache_key".into(),
-            Value::String(affinity.to_owned()),
-        );
-    }
-    Ok(())
 }
 
 fn discover(
@@ -516,14 +466,20 @@ fn discover(
     url.push(if url.contains('?') { '&' } else { '?' });
     url.push_str("client_version=");
     url.push_str(identity::version(&provider, CLIENT_VERSION));
-    let mut headers = vec![("accept".into(), "application/json".into())];
+    // Official 0.167.0 `/models` capture: version, auth identity, then the
+    // reqwest default Accept.
+    let mut headers = vec![("version".into(), identity::version(&provider, CLIENT_VERSION).into())];
     codex::append_identity_headers(&provider, &mut headers)?;
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: "GET".into(),
-        url,
-        headers,
-        body: Vec::new(),
-    })?;
+    headers.push(("accept".into(), "*/*".into()));
+    let response = host.http_start(
+        stravia_vendor_sdk::net::Request {
+            method: "GET".into(),
+            url,
+            headers: codex::http_fields(headers),
+            body: Vec::new(),
+        },
+        &codex::http_options()?,
+    )?;
     ensure_success(&response, "Codex model discovery")?;
     let body = stravia_vendor_sdk::read_http_body(&response, MAX_MODELS_BODY)?;
     let value: Value = serde_json::from_slice(&body)
@@ -1036,7 +992,7 @@ mod tests {
         .body;
         assert_eq!(body["metadata"], json!({"verification":"canonical-final"}));
         assert_eq!(body["prompt_cache_retention"], "24h");
-        codex::prepare_body(&mut body).unwrap();
+        codex::prepare_operation_body(&mut body, codex::BodyOperation::Http).unwrap();
         for unsupported in [
             "metadata",
             "prompt_cache_retention",
@@ -1061,6 +1017,61 @@ mod tests {
         assert_eq!(
             serde_json::to_value(request).unwrap(),
             serde_json::to_value(original).unwrap()
+        );
+    }
+
+    #[test]
+    fn v2_compaction_request_uses_live_instructions_and_typed_trigger() {
+        use stravia_runtime_contract::protocol::ir::CompactionControl;
+
+        let mut explicit = AiRequest::new("gpt-6-astra", Vec::new());
+        explicit.instructions = Some("session rules".into());
+        explicit.parameters.compaction = Some(CompactionControl {
+            threshold_tokens: Some(4096),
+            instructions: Some("summary rules".into()),
+        });
+        stravia_protocol_codec::codec::compaction::prepare_responses_compaction_request(
+            &mut explicit,
+        );
+        assert_eq!(
+            explicit.instructions.as_deref(),
+            Some("session rules\n\nCompaction instructions:\nsummary rules")
+        );
+        assert!(explicit.parameters.compaction.is_none());
+        assert!(explicit.items.last().unwrap().is_compaction_trigger());
+        let encoded =
+            common::encode_inference_request(&OPEN_RESPONSES_2026_04_24.to_string(), explicit)
+                .unwrap()
+                .body;
+        assert_eq!(
+            encoded["instructions"],
+            json!("session rules\n\nCompaction instructions:\nsummary rules")
+        );
+        assert_eq!(
+            encoded["input"].as_array().unwrap().last().unwrap(),
+            &json!({"type": "compaction_trigger"})
+        );
+        assert!(encoded.get("context_management").is_none());
+
+        let mut defaulted = AiRequest::new("gpt-6-astra", Vec::new());
+        stravia_protocol_codec::codec::compaction::prepare_responses_compaction_request(
+            &mut defaulted,
+        );
+        assert_eq!(
+            defaulted.instructions.as_deref(),
+            Some(stravia_protocol_codec::codec::compaction::DEFAULT_COMPACTION_INSTRUCTIONS)
+        );
+        let encoded =
+            common::encode_inference_request(&OPEN_RESPONSES_2026_04_24.to_string(), defaulted)
+                .unwrap()
+                .body;
+        assert_eq!(
+            encoded["instructions"],
+            stravia_protocol_codec::codec::compaction::DEFAULT_COMPACTION_INSTRUCTIONS
+        );
+        assert_eq!(
+            encoded["input"].as_array().unwrap().last().unwrap(),
+            &json!({"type": "compaction_trigger"})
         );
     }
 
@@ -1101,7 +1112,7 @@ mod tests {
                 .unwrap()
                 .body;
         body["tools"] = tools.into();
-        codex::prepare_body(&mut body).unwrap();
+        codex::prepare_operation_body(&mut body, codex::BodyOperation::Http).unwrap();
         assert!(
             body.get("tool_choice").is_none(),
             "CLI inference uses string tool choices"
@@ -1153,7 +1164,7 @@ mod tests {
             let mut body = json!({
                 "model":"gpt-6-astra", "input":"hello", "tools":tools, "tool_choice":"required"
             });
-            codex::prepare_body(&mut body).unwrap();
+            codex::prepare_operation_body(&mut body, codex::BodyOperation::Http).unwrap();
             assert_eq!(body["input"], "hello");
             assert_eq!(body["tools"], json!([]));
             assert!(body.get("tool_choice").is_none());

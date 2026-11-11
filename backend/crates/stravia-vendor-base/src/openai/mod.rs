@@ -14,9 +14,9 @@ use stravia_vendor_sdk::{
     Capability, ChannelDescriptor, ConfigField, ConfigFieldKind, ConfigGroup,
     ConfigValidationResponse, ConnectionCheckResponse, ConnectionCheckVerification,
     DataCompatibility, DiscoverRequest, DiscoverResponse, DiscoveredModel, ErrorKind, GuestHost,
-    HttpRequest, MODELS_SOURCE_CATALOG, NetworkDeclaration, Operation, OperationInput,
-    OperationOutput, OriginDeclaration, PluginError, ProviderDescriptor, ProviderSnapshot,
-    TransportPreference, ValidationIssue,
+    MODELS_SOURCE_CATALOG, NetworkDeclaration, Operation, OperationInput, OperationOutput,
+    OriginDeclaration, PluginError, ProviderDescriptor, ProviderSnapshot, TransportPreference,
+    ValidationIssue,
 };
 
 const VENDOR_ID: &str = "openai";
@@ -222,16 +222,11 @@ fn infer(
     let preserve_upstream_errors = operation == Operation::Infer
         && protocol == OPEN_RESPONSES_2026_04_24
         && stravia_protocol_codec::codec::compaction::native_compaction_requested(&request);
-    let compact_fields = if operation == Operation::Compact {
-        request
-            .meta
-            .vendor
-            .ingress
-            .get("__stravia_compact_fields")
-            .cloned()
-    } else {
-        None
-    };
+    if operation == Operation::Compact {
+        stravia_protocol_codec::codec::compaction::prepare_responses_compaction_request(
+            &mut request,
+        );
+    }
     let encoded = crate::parameters::encode(&provider, &protocol.to_string(), request)?;
     let mut body = encoded.body;
     if protocol == OPEN_RESPONSES_2026_04_24 {
@@ -253,38 +248,28 @@ fn infer(
         .map(Box::new)
         .map(OperationOutput::Infer);
     }
-    if operation == Operation::Compact {
-        retain_compact_fields(compact_fields.as_ref(), &mut body)?;
-    }
-    let path = if operation == Operation::Compact {
-        "/v1/responses/compact".to_owned()
-    } else {
-        encoded.path
-    };
-    let url = endpoint(&provider.base_url, &path);
+    let url = endpoint(&provider.base_url, &encoded.path);
     let mut headers = common::header_pairs(&encoded.headers)?;
-    set_header(&mut headers, "content-type", "application/json".into());
-    if !headers
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("accept"))
-    {
-        headers.push((
-            "accept".into(),
-            "text/event-stream, application/json".into(),
-        ));
+    headers.remove("content-type");
+    headers.append("content-type", "application/json");
+    if headers.get("accept").is_none() {
+        headers.append("accept", "text/event-stream, application/json");
     }
-    headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+    headers.remove("authorization");
     if let Some(api_key) = credential(&provider, "apiKey") {
-        headers.push(("authorization".into(), format!("Bearer {api_key}")));
+        headers.append("authorization", format!("Bearer {api_key}"));
     }
     host.emit_started()?;
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: "POST".into(),
-        url,
-        headers,
-        body: serde_json::to_vec(&body)
-            .map_err(|_| invalid("OpenAI request could not be encoded"))?,
-    })?;
+    let response = host.http_start(
+        stravia_vendor_sdk::net::Request {
+            method: "POST".into(),
+            url,
+            headers,
+            body: serde_json::to_vec(&body)
+                .map_err(|_| invalid("OpenAI request could not be encoded"))?,
+        },
+        &crate::net_options(),
+    )?;
     match operation {
         Operation::Infer => {
             let decoded = if preserve_upstream_errors {
@@ -340,34 +325,6 @@ fn prepare_responses_body(
     Ok(())
 }
 
-fn set_header(headers: &mut Vec<(String, String)>, name: &str, value: String) {
-    headers.retain(|(candidate, _)| !candidate.eq_ignore_ascii_case(name));
-    headers.push((name.into(), value));
-}
-
-fn retain_compact_fields(fields: Option<&Value>, body: &mut Value) -> Result<(), PluginError> {
-    let object = body
-        .as_object_mut()
-        .ok_or_else(|| invalid("Open Responses compact request must be an object"))?;
-    let explicit = fields.and_then(Value::as_array);
-    object.retain(|key, _| {
-        matches!(key.as_str(), "model" | "input" | "instructions")
-            || (matches!(
-                key.as_str(),
-                "previous_response_id"
-                    | "prompt_cache_key"
-                    | "prompt_cache_options"
-                    | "prompt_cache_retention"
-                    | "service_tier"
-            ) && explicit.is_none_or(|fields| {
-                fields
-                    .iter()
-                    .any(|field| field.as_str() == Some(key.as_str()))
-            }))
-    });
-    Ok(())
-}
-
 fn infer_responses_websocket(
     host: &GuestHost,
     provider: &ProviderSnapshot,
@@ -377,9 +334,9 @@ fn infer_responses_websocket(
 ) -> Result<stravia_runtime_contract::protocol::ir::AiResponse, PluginError> {
     let mut headers = common::header_pairs(codec_headers)?;
 
-    headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+    headers.remove("authorization");
     if let Some(api_key) = credential(provider, "apiKey") {
-        headers.push(("authorization".into(), format!("Bearer {api_key}")));
+        headers.append("authorization", format!("Bearer {api_key}"));
     }
     let url = if let Some(url) = configured_websocket_url(provider) {
         url.to_owned()
@@ -401,13 +358,8 @@ fn infer_responses_websocket(
         .flatten();
     execute_responses_websocket(
         host,
-        stravia_vendor_sdk::WsRequest {
-            url,
-            headers,
-            protocols: Vec::new(),
-            continuation_id,
-            reuse_max_age_millis: None,
-        },
+        stravia_vendor_sdk::net::ConnectRequest { url, headers },
+        continuation_id,
         body,
         preserve_upstream_errors,
         classify_responses_stream_error,
@@ -416,7 +368,8 @@ fn infer_responses_websocket(
 
 pub(crate) fn execute_responses_websocket(
     host: &GuestHost,
-    request: stravia_vendor_sdk::WsRequest,
+    request: stravia_vendor_sdk::net::ConnectRequest,
+    continuation_id: Option<String>,
     mut body: Value,
     preserve_upstream_errors: bool,
     classify_error: fn(&Value, bool) -> Option<PluginError>,
@@ -431,9 +384,15 @@ pub(crate) fn execute_responses_websocket(
     object.remove("stream");
     object.remove("background");
     object.insert("type".into(), Value::String("response.create".into()));
-    let connection = host.ws_connect(request)?;
+    let mut options = crate::net_options();
+    if let Some(id) = continuation_id.as_deref() {
+        options
+            .continuation(id)
+            .map_err(|error| invalid(error.to_string()))?;
+    }
+    let connection = host.ws_connect(request, &options)?;
     host.emit_started()?;
-    connection.send(&stravia_vendor_sdk::WsMessage::Text(
+    connection.send(&stravia_vendor_sdk::net::WsMessage::Text(
         serde_json::to_string(&body)
             .map_err(|_| invalid("Responses WebSocket request could not be encoded"))?,
     ))?;
@@ -444,6 +403,7 @@ pub(crate) fn execute_responses_websocket(
         preserve_upstream_errors,
         continuation_requested,
         classify_error,
+        None,
     )
 }
 
@@ -473,16 +433,20 @@ fn discover(
         .filter(|source| !source.is_empty() && *source != MODELS_SOURCE_CATALOG)
         .map(str::to_owned)
         .map_or_else(|| common::model_discovery_url(&provider.base_url), Ok)?;
-    let mut headers = vec![("accept".into(), "application/json".into())];
+    let mut headers = stravia_vendor_sdk::net::Fields::new();
+    headers.append("accept", "application/json");
     if let Some(api_key) = credential(&provider, "apiKey") {
-        headers.push(("authorization".into(), format!("Bearer {api_key}")));
+        headers.append("authorization", format!("Bearer {api_key}"));
     }
-    let response = host.http_start(stravia_vendor_sdk::wit::types::HttpRequest {
-        method: "GET".into(),
-        url,
-        headers,
-        body: Vec::new(),
-    })?;
+    let response = host.http_start(
+        stravia_vendor_sdk::net::Request {
+            method: "GET".into(),
+            url,
+            headers,
+            body: Vec::new(),
+        },
+        &crate::net_options(),
+    )?;
     ensure_success(&response, "OpenAI model discovery")?;
     let body = stravia_vendor_sdk::read_http_body(&response, MAX_MODELS_BODY)?;
     let value: Value = serde_json::from_slice(&body)
@@ -561,19 +525,21 @@ pub(crate) fn connection_check(
 ) -> Result<ConnectionCheckResponse, PluginError> {
     let url = common::model_discovery_url(&provider.base_url)?;
     let api_key = credential(provider, "apiKey");
-    let mut headers = vec![("accept".into(), "application/json".into())];
+    let mut headers = stravia_vendor_sdk::net::Fields::new();
+    headers.append("accept", "application/json");
     if let Some(api_key) = api_key {
-        headers.push(("authorization".into(), format!("Bearer {api_key}")));
+        headers.append("authorization", format!("Bearer {api_key}"));
     }
-    let value = common_check::json(
-        host,
-        HttpRequest {
+    let response = host.http_start(
+        stravia_vendor_sdk::net::Request {
             method: "GET".into(),
             url,
             headers,
             body: Vec::new(),
         },
+        &crate::net_options(),
     )?;
+    let value = common_check::read_json(&response)?;
     crate::connection_check::validate_models(&value, &["data", "models"], &["id", "slug", "name"])?;
     Ok(ConnectionCheckResponse {
         verified: if api_key.is_some() && official_openai_origin(&provider.base_url) {
@@ -656,7 +622,7 @@ pub(super) fn endpoint(base_url: &str, path: &str) -> String {
 }
 
 pub(super) fn ensure_success(
-    response: &stravia_vendor_sdk::HttpResponse,
+    response: &stravia_vendor_sdk::net::HttpResponse,
     label: &str,
 ) -> Result<u16, PluginError> {
     let status = response.status()?;
@@ -821,34 +787,5 @@ mod tests {
             prepare_responses_body(&provider, &mut body).unwrap();
             assert_eq!(body.get("include"), include.as_ref());
         }
-    }
-
-    #[test]
-    fn compact_metadata_cannot_authorize_nonofficial_fields() {
-        let mut body = serde_json::json!({
-            "model": "model", "input": [], "instructions": "keep",
-            "previous_response_id": "response", "prompt_cache_key": "cache",
-            "service_tier": "default", "max_output_tokens": 10,
-            "unknown": {"business": true}
-        });
-        retain_compact_fields(
-            Some(&serde_json::json!([
-                "previous_response_id",
-                "prompt_cache_key",
-                "service_tier",
-                "max_output_tokens",
-                "unknown"
-            ])),
-            &mut body,
-        )
-        .unwrap();
-        assert_eq!(
-            body,
-            serde_json::json!({
-                "model": "model", "input": [], "instructions": "keep",
-                "previous_response_id": "response", "prompt_cache_key": "cache",
-                "service_tier": "default"
-            })
-        );
     }
 }

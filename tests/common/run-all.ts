@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   createWriteStream,
@@ -13,6 +13,12 @@ import { finished } from "node:stream/promises";
 
 const started = performance.now();
 const repository = resolve(import.meta.dir, "../..");
+const preparation = spawnSync("task", ["prepare:crates"], {
+  cwd: repository,
+  stdio: "inherit",
+});
+if (preparation.error) throw preparation.error;
+if (preparation.status !== 0) throw new Error("Failed to prepare patched Cargo crates");
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 const logDirectory = join(
   repository,
@@ -142,13 +148,19 @@ const workspace = [
   "--exclude",
   "stravia-vendor-management-contract-fixture",
   "--exclude",
-  "stravia-vendor-legacy-contract-fixture",
+  "stravia-vendor-manual-contract-fixture",
+  "--exclude",
+  "stravia-vendor-net-1-0-compat-fixture",
+  "--exclude",
+  "stravia-vendor-state-contract-fixture",
   "--features",
   "stravia-server/test-harness",
 ];
 const localIgnored: Record<string, true> = {
   "agent::artifact::tests::postgres_download_lifecycle_survives_reconstruction": true,
   "compaction::retention_tests::postgres_retention_contracts": true,
+  "plugin::store::atomic_journal_tests::postgres_journal_persistence": true,
+  "plugin::store::atomic_state_tests::postgres_atomic_operations_do_not_serialize_on_unrelated_provider": true,
   "interaction_observation::snapshot_tests::postgres_credential_discoveries_match_persisted_contract": true,
   postgres_admin_history_preserves_batches_and_retention: true,
   postgres_upgrade_defaults_unconfigured_routes_to_text_and_preserves_identity: true,
@@ -197,7 +209,7 @@ const localIgnored: Record<string, true> = {
   http_nonstream_client_uses_native_stream: true,
   http_malformed_and_truncated_sse_fail: true,
   http_non_success_json_keeps_status: true,
-  http_compaction_remains_unary_and_preserves_error: true,
+  http_compaction_uses_the_trigger_stream_and_preserves_error: true,
   real_base_executes_with_stable_wasi_patches_and_mixed_imports: true,
   "runtime::compilation_cache_tests::in_memory_compilation_reuses_live_components_and_recompiles_after_release": true,
   "runtime::residency_tests::idle_plugin_is_released_and_restored_from_the_persistent_cache": true,

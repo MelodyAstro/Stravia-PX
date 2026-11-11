@@ -46,23 +46,36 @@ async fn close_test_gateway(gateway: Gateway, data_dir: tempfile::TempDir) {
 async fn wait_for_observed_run_finish(
     events: &mut crate::interaction_observation::ObservationStream,
 ) {
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+    let mut received = 0;
+    let mut last_kind = None;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
             let event = events
                 .next()
                 .await
                 .expect("Observation stream remains open");
-            if matches!(
-                event,
-                crate::interaction_observation::ObservationUpdate::Change(event)
-                    if event.kind == "run_finished"
-            ) {
-                break;
+            match event {
+                crate::interaction_observation::ObservationUpdate::Change(change) => {
+                    received += 1;
+                    if change.kind == "run_finished" {
+                        break;
+                    }
+                    last_kind = Some(change.kind);
+                }
+                crate::interaction_observation::ObservationUpdate::ResetRequired {
+                    snapshot_sequence,
+                } => {
+                    panic!("observation subscription reset at sequence {snapshot_sequence}");
+                }
+                _ => {}
             }
         }
     })
-    .await
-    .expect("first request completes before continuation");
+    .await;
+    assert!(
+        result.is_ok(),
+        "observed run completion timed out after {received} changes; last kind: {last_kind:?}"
+    );
 }
 
 struct CommitBarrierStore {
@@ -387,61 +400,6 @@ impl stravia_runtime_contract::hook::HookSession for RewriteModelSession {
         Ok(stravia_runtime_contract::hook::ActionBatch::one(
             stravia_runtime_contract::hook::HookAction::PatchRequest(Box::new(
                 stravia_runtime_contract::hook::RequestPatch::SetModel(self.model.clone()),
-            )),
-        ))
-    }
-}
-
-struct PrependContextHook {
-    observed: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
-}
-
-struct PrependContextSession {
-    observed: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
-}
-
-impl stravia_runtime_contract::hook::Hook for PrependContextHook {
-    fn descriptor(&self) -> stravia_runtime_contract::hook::HookDescriptor {
-        stravia_runtime_contract::hook::HookDescriptor {
-            event_kinds: vec![stravia_runtime_contract::hook::EventKind::Request],
-            ..stravia_runtime_contract::hook::HookDescriptor::all("prepend-context")
-        }
-    }
-
-    fn create_session(
-        &self,
-        _context: &stravia_runtime_contract::hook::SessionContext,
-    ) -> Box<dyn stravia_runtime_contract::hook::HookSession> {
-        Box::new(PrependContextSession {
-            observed: self.observed.clone(),
-        })
-    }
-}
-
-#[async_trait]
-impl stravia_runtime_contract::hook::HookSession for PrependContextSession {
-    async fn handle(
-        &mut self,
-        event: stravia_runtime_contract::hook::HookEvent<'_>,
-    ) -> Result<stravia_runtime_contract::hook::ActionBatch, String> {
-        let stravia_runtime_contract::hook::HookEvent::Request { current, .. } = event else {
-            return Ok(stravia_runtime_contract::hook::ActionBatch::default());
-        };
-        self.observed.lock().push(
-            current
-                .items
-                .iter()
-                .map(|item| item.content.to_text())
-                .collect(),
-        );
-        let mut rewritten = current.clone();
-        let mut marker =
-            stravia_runtime_contract::protocol::ir::AiItem::output_text("hook context");
-        marker.role = stravia_runtime_contract::protocol::ir::Role::User;
-        rewritten.items.insert(0, marker);
-        Ok(stravia_runtime_contract::hook::ActionBatch::one(
-            stravia_runtime_contract::hook::HookAction::PatchRequest(Box::new(
-                stravia_runtime_contract::hook::RequestPatch::ReplaceCanonical(Box::new(rewritten)),
             )),
         ))
     }
@@ -1176,7 +1134,8 @@ async fn serve_media_parent(
                                     "function": {
                                         "name": "StraviaRead",
                                         "arguments": serde_json::json!({
-                                            "path": format!("stravia://artifacts/{id}?question=Describe%20the%20image")
+                                            "path": format!("stravia://artifacts/{id}"),
+                                            "question": "Describe the image"
                                         }).to_string()
                                     }
                                 }]
@@ -1225,7 +1184,9 @@ async fn serve_media_parent(
                                     "function": {
                                         "name": "StraviaRead",
                                         "arguments": serde_json::json!({
-                                            "path": format!("stravia://artifacts/{id}?question=Identify%20the%20subject&previous_path=stravia%3A%2F%2Fturns%2F{turn_id}")
+                                            "path": format!("stravia://turns/{turn_id}"),
+                                            "question": "Identify the subject",
+                                            "attachments": [format!("stravia://artifacts/{id}")]
                                         }).to_string()
                                     }
                                 }]
@@ -4270,6 +4231,8 @@ mod admission;
 mod auth_hook;
 #[cfg(test)]
 mod continuation;
+#[cfg(test)]
+mod history_boundary;
 #[cfg(test)]
 mod lifecycle;
 #[cfg(test)]

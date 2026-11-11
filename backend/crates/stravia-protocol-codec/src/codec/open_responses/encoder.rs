@@ -18,12 +18,21 @@ pub struct ResponsesEncoder;
 
 // Open Responses fields are emitted only from the canonical IR and dated extension.
 impl ResponsesEncoder {
-    pub fn encode_request(&self, mut req: AiRequest) -> Result<(Value, HeaderMap)> {
+    pub fn encode_request(&self, req: AiRequest) -> Result<(Value, HeaderMap)> {
+        self.encode_request_observing_gaps(req, |_| {})
+    }
+
+    pub(super) fn encode_request_observing_gaps(
+        &self,
+        mut req: AiRequest,
+        mut observe_gap: impl FnMut(usize),
+    ) -> Result<(Value, HeaderMap)> {
         req.normalize_parameters();
         validate_target_thinking_control(&req)?;
         let mut input: Vec<Value> = Vec::new();
 
         for mut item in std::mem::take(&mut req.items) {
+            observe_gap(input.len());
             if let Some(native) = take_native_compaction_item(&mut item) {
                 input.push(native);
                 continue;
@@ -169,6 +178,7 @@ impl ResponsesEncoder {
             }
         }
 
+        observe_gap(input.len());
         if input.is_empty() && req.parameters.continuation.is_none() {
             anyhow::bail!("responses request requires input or previous_response_id");
         }
@@ -613,7 +623,7 @@ fn take_native_compaction_item(
             // signed block in the opaque field instead of exposing a bare signature.
             let encrypted_content = match summary {
                 Some(summary) => {
-                    let block = item
+                    let mut block = item
                         .meta
                         .as_mut()
                         .and_then(|meta| {
@@ -623,14 +633,15 @@ fn take_native_compaction_item(
                             .ok()
                             .flatten()
                         })
-                        .unwrap_or_else(|| {
-                            serde_json::json!({
-                                "type": "compaction",
-                                "content": summary,
-                                "signature": encrypted_content,
-                            })
-                        });
-                    crate::codec::compaction::seal_anthropic(&block)
+                        .and_then(|block| match block {
+                            Value::Object(block) => Some(block),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+                    block.insert("type".into(), "compaction".into());
+                    block.insert("content".into(), summary.into());
+                    block.insert("signature".into(), encrypted_content.into());
+                    crate::codec::compaction::seal_anthropic(&Value::Object(block))
                 }
                 None => encrypted_content,
             };

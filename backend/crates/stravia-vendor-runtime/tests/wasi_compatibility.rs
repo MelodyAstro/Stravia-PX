@@ -68,11 +68,37 @@ async fn rejects_forbidden_wasi_interfaces_and_versions() {
 #[tokio::test]
 async fn accepts_compatible_vendor_abi_before_descriptor_admission() {
     let runtime = VendorRuntime::new().expect("runtime");
-    for version in ["0.6.0"] {
-        for interface in ["host", "types"] {
-            let name = format!("stravia:vendor/{interface}@{version}");
+    for version in ["1.0.0", "1.0.1", "1.0.99"] {
+        for interface in [
+            "vendor/host",
+            "vendor/types",
+            "net/types",
+            "net/http",
+            "net/websocket",
+            "state/store",
+        ] {
+            let name = format!("stravia:{interface}@{version}");
             let bytes = wat::parse_str(format!("(component (import \"{name}\" (instance)))"))
                 .expect("valid component without guest exports");
+            match runtime.load(&bytes).await {
+                Err(LoadError::DescriptorExecution(_)) => {}
+                Err(other) => panic!("{name}: compatible ABI rejected before exports: {other:?}"),
+                Ok(_) => panic!("{name}: component without descriptor was admitted"),
+            }
+        }
+    }
+    for interface in [
+        "net/types",
+        "net/http",
+        "net/websocket",
+        "state/store",
+        "state/volatile",
+        "state/journal",
+    ] {
+        for version in ["1.1.0", "1.1.3"] {
+            let name = format!("stravia:{interface}@{version}");
+            let bytes =
+                wat::parse_str(format!("(component (import \"{name}\" (instance)))")).unwrap();
             match runtime.load(&bytes).await {
                 Err(LoadError::DescriptorExecution(_)) => {}
                 Err(other) => panic!("{name}: compatible ABI rejected before exports: {other:?}"),
@@ -83,26 +109,96 @@ async fn accepts_compatible_vendor_abi_before_descriptor_admission() {
 }
 
 #[tokio::test]
-async fn rejects_retired_vendor_abi_before_descriptor_admission() {
+async fn rejects_incompatible_vendor_abi_before_descriptor_admission() {
     let runtime = VendorRuntime::new().expect("runtime");
-    for name in [
-        "stravia:vendor/host@0.4.0",
-        "stravia:vendor/types@0.4.0",
-        "stravia:vendor/host@0.5.0",
-        "stravia:vendor/types@0.5.0",
-        "stravia:vendor/host@0.5.1",
-        "stravia:vendor/types@0.5.1",
-        "stravia:vendor/host@0.5.2",
-        "stravia:vendor/types@0.5.2",
-        "stravia:vendor/host@0.6.1",
-        "stravia:vendor/types@0.6.1",
+    for version in ["0.4.0", "0.5.2", "0.6.0", "0.6.1", "2.0.0"] {
+        for interface in [
+            "vendor/host",
+            "vendor/types",
+            "net/types",
+            "net/http",
+            "net/websocket",
+            "state/store",
+        ] {
+            let name = format!("stravia:{interface}@{version}");
+            let bytes = wat::parse_str(format!("(component (import \"{name}\" (instance)))"))
+                .expect("valid incompatible-ABI component");
+            match runtime.load(&bytes).await {
+                Err(error @ LoadError::IncompatibleAbi { .. }) => {
+                    assert!(error.to_string().contains("rebuild"), "{error}");
+                }
+                Err(other) => panic!("{name}: expected IncompatibleAbi, got {other:?}"),
+                Ok(_) => panic!("{name}: incompatible ABI was admitted"),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn rejects_newer_minor_with_structured_error() {
+    let runtime = VendorRuntime::new().expect("runtime");
+    for (interface, required, available) in [
+        ("vendor/host", "1.1.3", "1.0.0"),
+        ("vendor/types", "1.1.3", "1.0.0"),
+        ("net/types", "1.2.3", "1.1.0"),
+        ("net/http", "1.2.3", "1.1.0"),
+        ("net/websocket", "1.2.3", "1.1.0"),
+        ("state/store", "1.2.3", "1.1.0"),
+        ("state/volatile", "1.2.3", "1.1.0"),
+        ("state/journal", "1.2.3", "1.1.0"),
     ] {
+        let interface = format!("stravia:{interface}");
+        let name = format!("{interface}@{required}");
         let bytes = wat::parse_str(format!("(component (import \"{name}\" (instance)))"))
-            .expect("valid retired-ABI component");
+            .expect("valid newer-ABI component");
         match runtime.load(&bytes).await {
-            Err(LoadError::ForbiddenImport(actual)) => assert_eq!(actual, name),
-            Err(other) => panic!("{name}: expected ForbiddenImport, got {other:?}"),
-            Ok(_) => panic!("{name}: retired vendor ABI was admitted"),
+            Err(LoadError::RequiresNewerHost {
+                interface: actual,
+                required: actual_required,
+                available: actual_available,
+            }) => {
+                assert_eq!(actual, interface);
+                assert_eq!(actual_required, required);
+                assert_eq!(actual_available, available);
+            }
+            Err(other) => panic!("{name}: expected RequiresNewerHost, got {other:?}"),
+            Ok(_) => panic!("{name}: newer ABI was admitted"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn rejects_unknown_and_unstable_vendor_interfaces() {
+    let runtime = VendorRuntime::new().expect("runtime");
+    for name in ["stravia:vendor/host@1.0.0-rc.1"] {
+        let bytes = wat::parse_str(format!("(component (import \"{name}\" (instance)))"))
+            .expect("valid component");
+        assert!(
+            matches!(runtime.load(&bytes).await, Err(LoadError::ForbiddenImport(actual)) if actual == name)
+        );
+    }
+}
+
+#[tokio::test]
+async fn rejects_unknown_stable_first_party_capabilities_as_newer_host() {
+    let runtime = VendorRuntime::new().expect("runtime");
+    for interface in ["stravia:future/store", "stravia:net/other"] {
+        let name = format!("{interface}@1.0.0");
+        let bytes = wat::parse_str(format!("(component (import \"{name}\" (instance)))")).unwrap();
+        match runtime.load(&bytes).await {
+            Err(LoadError::RequiresNewerHost {
+                interface: actual,
+                required,
+                available,
+            }) => {
+                assert_eq!(actual, interface);
+                assert_eq!(required, "1.0.0");
+                assert_eq!(available, "unavailable");
+            }
+            other => panic!(
+                "expected missing capability for {name}, got {:?}",
+                other.err()
+            ),
         }
     }
 }

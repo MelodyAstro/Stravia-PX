@@ -14,11 +14,12 @@ use stravia_runtime_contract::protocol::ids::{
     OPENAI_COMPATIBLE_CHAT_COMPLETIONS_V1, OPENAI_COMPATIBLE_EMBEDDINGS_V1, Protocol,
 };
 use stravia_runtime_contract::protocol::ir::AiRequest;
+use stravia_vendor_sdk::net::{ConnectRequest, Fields, Request};
 use stravia_vendor_sdk::{
     ConfigValidationResponse, ConnectionCheckResponse, ConnectionCheckVerification,
-    DiscoverRequest, DiscoverResponse, DiscoveredModel, ErrorKind, GuestHost, HttpRequest,
+    DiscoverRequest, DiscoverResponse, DiscoveredModel, ErrorKind, GuestHost,
     MODELS_SOURCE_CATALOG, Operation, OperationInput, OperationOutput, PluginError,
-    ProviderSnapshot, TransportPreference, ValidationIssue, WsRequest, read_http_body,
+    ProviderSnapshot, TransportPreference, ValidationIssue, read_http_body,
 };
 
 use crate::metadata::ACCOUNT_DISCOVERY_PROVIDER_IDS;
@@ -130,13 +131,9 @@ pub(crate) fn execute_inference(
         .filter(|model| !model.is_empty())
         .ok_or_else(|| common::plugin_error(ErrorKind::Invalid, "inference requires a model"))?;
     request.model = model.to_owned();
-    let compaction_control = (operation == Operation::Compact)
-        .then(|| {
-            stravia_protocol_codec::codec::compaction::take_anthropic_compaction_control(
-                &mut request,
-            )
-        })
-        .flatten();
+    let compaction_control = (operation == Operation::Compact).then(|| {
+        stravia_protocol_codec::codec::compaction::take_anthropic_compaction_control(&mut request)
+    });
     if !matches!(protocol, COHERE_PROTOCOL | GATEWAY_PROTOCOL) {
         thinking::apply(
             vendor_id,
@@ -165,7 +162,7 @@ pub(crate) fn execute_inference(
             compaction_control,
         )
         .map_err(|error| common::plugin_error(ErrorKind::Invalid, error.to_string()))?;
-        stravia_protocol_codec::codec::compaction::add_anthropic_compaction_beta(&mut headers);
+        crate::add_anthropic_compaction_beta(&mut headers);
         // 共享 helper 强制 stream:true，上游会以 SSE 交付完整签名块。
         set_header(
             &mut headers,
@@ -209,13 +206,11 @@ pub(crate) fn execute_inference(
             .map(str::to_owned);
         return crate::openai::execute_responses_websocket(
             host,
-            WsRequest {
+            ConnectRequest {
                 url: url.into(),
                 headers,
-                protocols: Vec::new(),
-                continuation_id,
-                reuse_max_age_millis: None,
             },
+            continuation_id,
             encoded.body,
             preserve_upstream_errors,
             classify_open_responses_error,
@@ -232,12 +227,15 @@ pub(crate) fn execute_inference(
     })?;
     drop(encoded);
     host.emit_started()?;
-    let response = host.http_start(HttpRequest {
-        method: "POST".to_owned(),
-        url,
-        headers,
-        body,
-    })?;
+    let response = host.http_start(
+        Request {
+            method: "POST".to_owned(),
+            url,
+            headers,
+            body,
+        },
+        &crate::net_options(),
+    )?;
     if operation == Operation::Compact {
         return common::decode_anthropic_compaction_preserving_upstream_errors(host, response)
             .map(OperationOutput::Compact);
@@ -667,15 +665,15 @@ fn effective_base_url(vendor_id: &str, provider: &ProviderSnapshot) -> Result<St
     Ok(provider.base_url.trim().to_owned())
 }
 
-fn set_header(headers: &mut Vec<(String, String)>, name: &str, value: String) {
-    headers.retain(|(candidate, _)| !candidate.eq_ignore_ascii_case(name));
-    headers.push((name.to_owned(), value));
+fn set_header(headers: &mut Fields, name: &str, value: String) {
+    headers.remove(name);
+    headers.append(name, value);
 }
 
 fn append_official_session_headers(
     vendor_id: &str,
     provider: &ProviderSnapshot,
-    headers: &mut Vec<(String, String)>,
+    headers: &mut Fields,
 ) {
     // OpenRouter 明确支持 sticky/grouping；不能把私有头普发给其它兼容 API。
     // https://openrouter.ai/docs/guides/best-practices/prompt-caching
@@ -700,34 +698,34 @@ fn apply_auth_headers(
     vendor_id: &str,
     provider: &ProviderSnapshot,
     protocol: &str,
-    headers: &mut Vec<(String, String)>,
+    headers: &mut Fields,
 ) -> Result<(), PluginError> {
-    headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+    headers.remove("authorization");
     if protocol == GEMINI_PROTOCOL && matches!(vendor_id, "google" | "custom") {
         return Ok(());
     }
     if vendor_id == "cloudflare-ai-gateway" {
-        headers.push((
-            "cf-aig-authorization".to_owned(),
+        headers.append(
+            "cf-aig-authorization",
             format!("Bearer {}", credential(provider, "apiToken")?),
-        ));
+        );
         return Ok(());
     }
     let token = setting(provider, "apiKey").filter(|token| !token.trim().is_empty());
     if protocol == ANTHROPIC_PROTOCOL {
         if let Some(token) = token {
-            headers.push(("x-api-key".to_owned(), token.to_owned()));
+            headers.append("x-api-key", token);
         }
-        headers.push(("anthropic-version".to_owned(), "2023-06-01".to_owned()));
+        headers.append("anthropic-version", "2023-06-01");
     } else if let Some(token) = token {
-        headers.push(("authorization".to_owned(), format!("Bearer {token}")));
+        headers.append("authorization", format!("Bearer {token}"));
     }
     if vendor_id == "openrouter" {
         if let Some(value) = setting(provider, "httpReferer").filter(|v| !v.trim().is_empty()) {
-            headers.push(("HTTP-Referer".to_owned(), value.to_owned()));
+            headers.append("HTTP-Referer", value);
         }
         if let Some(value) = setting(provider, "xTitle").filter(|v| !v.trim().is_empty()) {
-            headers.push(("X-Title".to_owned(), value.to_owned()));
+            headers.append("X-Title", value);
         }
     }
     Ok(())
@@ -827,8 +825,9 @@ fn model_discovery_request(
     vendor_id: &str,
     provider: &ProviderSnapshot,
     request: &DiscoverRequest,
-) -> Result<HttpRequest, PluginError> {
-    let mut headers = vec![("accept".to_owned(), "application/json".to_owned())];
+) -> Result<Request, PluginError> {
+    let mut headers = Fields::new();
+    headers.append("accept", "application/json");
     let configured_source = provider
         .operation_metadata
         .get("models_source")
@@ -855,7 +854,7 @@ fn model_discovery_request(
         } else if google {
             // 非官方显式目录保留原有 Bearer 约定，不能仅凭路径推断 Google 认证。
             if let Some(token) = setting(provider, "apiKey").filter(|key| !key.trim().is_empty()) {
-                headers.push(("authorization".to_owned(), format!("Bearer {token}")));
+                headers.append("authorization", format!("Bearer {token}"));
             }
         } else {
             apply_auth_headers(vendor_id, provider, &protocol, &mut headers)?;
@@ -885,7 +884,7 @@ fn model_discovery_request(
         });
         url.push_str(&urlencoding::encode(cursor));
     }
-    Ok(HttpRequest {
+    Ok(Request {
         method: "GET".to_owned(),
         url,
         headers,
@@ -899,7 +898,10 @@ fn discover(
     provider: &ProviderSnapshot,
     request: DiscoverRequest,
 ) -> Result<DiscoverResponse, PluginError> {
-    let response = host.http_start(model_discovery_request(vendor_id, provider, &request)?)?;
+    let response = host.http_start(
+        model_discovery_request(vendor_id, provider, &request)?,
+        &crate::net_options(),
+    )?;
     let status = response.status()?;
     let headers = response.headers()?;
     let body = read_http_body(&response, MAX_JSON_BODY)?;
@@ -1044,12 +1046,15 @@ fn prepare_ollama_request(
     let body = serde_json::to_vec(&json!({"name": model})).map_err(|error| {
         common::plugin_error(ErrorKind::Trapped, format!("encode Ollama probe: {error}"))
     })?;
-    let response = host.http_start(HttpRequest {
-        method: "POST".to_owned(),
-        url: base.to_string(),
-        headers,
-        body,
-    })?;
+    let response = host.http_start(
+        Request {
+            method: "POST".to_owned(),
+            url: base.to_string(),
+            headers: crate::fields(headers),
+            body,
+        },
+        &crate::net_options(),
+    )?;
     let status = response.status()?;
     if !(200..300).contains(&status) {
         return Err(common::plugin_error(
@@ -1131,7 +1136,8 @@ pub(crate) fn connection_check(
     check_channel(vendor_id, channel, provider)?;
     let protocol = protocol_for(vendor_id, provider)?;
     let request = connection_check_request(vendor_id, provider, &protocol)?;
-    let value = common_check::json(host, request)?;
+    let response = host.http_start(request, &crate::net_options())?;
+    let value = common_check::read_json(&response)?;
     let (keys, id_fields): (&[&str], &[&str]) = if protocol == GEMINI_PROTOCOL {
         (&["models"], &["name", "id"])
     } else {
@@ -1147,9 +1153,10 @@ fn connection_check_request(
     vendor_id: &str,
     provider: &ProviderSnapshot,
     protocol: &str,
-) -> Result<HttpRequest, PluginError> {
+) -> Result<Request, PluginError> {
     let base = effective_base_url(vendor_id, provider)?;
-    let mut headers = vec![("accept".to_owned(), "application/json".to_owned())];
+    let mut headers = Fields::new();
+    headers.append("accept", "application/json");
     let url = if protocol == GEMINI_PROTOCOL {
         // Native Google inventory authenticates with the `key` query; the
         // configured API key is the only credential this protocol uses.
@@ -1164,7 +1171,7 @@ fn connection_check_request(
         apply_auth_headers(vendor_id, provider, protocol, &mut headers)?;
         models_list_url(vendor_id, &base)?
     };
-    Ok(HttpRequest {
+    Ok(Request {
         method: "GET".to_owned(),
         url,
         headers,
@@ -1210,7 +1217,7 @@ mod tests {
             request
                 .headers
                 .iter()
-                .any(|(name, value)| name == "authorization" && value == "Bearer sk-test")
+                .any(|field| field.name == "authorization" && field.bytes == b"Bearer sk-test")
         );
 
         let snapshot = provider(ANTHROPIC_PROTOCOL, "sk-ant");
@@ -1219,13 +1226,13 @@ mod tests {
             request
                 .headers
                 .iter()
-                .any(|(name, value)| name == "x-api-key" && value == "sk-ant")
+                .any(|field| field.name == "x-api-key" && field.bytes == b"sk-ant")
         );
         assert!(
             request
                 .headers
                 .iter()
-                .any(|(name, value)| name == "anthropic-version" && value == "2023-06-01")
+                .any(|field| field.name == "anthropic-version" && field.bytes == b"2023-06-01")
         );
 
         let mut google = provider(GEMINI_PROTOCOL, "key +&");
@@ -1239,7 +1246,7 @@ mod tests {
             !request
                 .headers
                 .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .any(|field| field.name.eq_ignore_ascii_case("authorization"))
         );
     }
 
@@ -1319,7 +1326,7 @@ mod tests {
             !request
                 .headers
                 .iter()
-                .any(|(name, _)| name == "authorization")
+                .any(|field| field.name == "authorization")
         );
 
         snapshot.operation_metadata.insert(
@@ -1335,13 +1342,13 @@ mod tests {
             request
                 .headers
                 .iter()
-                .any(|(name, value)| name == "authorization" && value == "Bearer key +&")
+                .any(|field| field.name == "authorization" && field.bytes == b"Bearer key +&")
         );
     }
 
     #[test]
     fn custom_vendor_applies_the_selected_protocol_auth_shape() {
-        let mut openai_headers = Vec::new();
+        let mut openai_headers = Fields::new();
         apply_auth_headers(
             "custom",
             &provider(OPENAI_CHAT_PROTOCOL, "sk-test"),
@@ -1351,10 +1358,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             openai_headers,
-            vec![("authorization".into(), "Bearer sk-test".into())]
+            crate::fields(vec![("authorization".into(), "Bearer sk-test".into())])
         );
 
-        let mut anthropic_headers = Vec::new();
+        let mut anthropic_headers = Fields::new();
         apply_auth_headers(
             "custom",
             &provider(ANTHROPIC_PROTOCOL, "sk-ant"),
@@ -1364,14 +1371,14 @@ mod tests {
         .unwrap();
         assert_eq!(
             anthropic_headers,
-            vec![
+            crate::fields(vec![
                 ("x-api-key".into(), "sk-ant".into()),
                 ("anthropic-version".into(), "2023-06-01".into()),
-            ]
+            ])
         );
 
         let custom_gemini = provider(GEMINI_PROTOCOL, "sk-custom-gemini");
-        let mut custom_gemini_headers = Vec::new();
+        let mut custom_gemini_headers = Fields::new();
         apply_auth_headers(
             "custom",
             &custom_gemini,
@@ -1379,7 +1386,7 @@ mod tests {
             &mut custom_gemini_headers,
         )
         .unwrap();
-        assert!(custom_gemini_headers.is_empty());
+        assert!(custom_gemini_headers.iter().next().is_none());
         assert_eq!(
             inference_url("custom", &custom_gemini, GEMINI_PROTOCOL, "/v1beta/models").unwrap(),
             "https://upstream.test/v1/models?key=sk-custom-gemini"
@@ -1390,16 +1397,16 @@ mod tests {
     fn optional_credentials_suppress_default_auth() {
         let openai = provider("openai-compatible", "");
         let openai_protocol = protocol_for("custom", &openai).unwrap();
-        let mut headers = Vec::new();
+        let mut headers = Fields::new();
         apply_auth_headers("custom", &openai, &openai_protocol, &mut headers).unwrap();
-        assert!(headers.is_empty());
+        assert!(headers.iter().next().is_none());
 
         let anthropic = provider("anthropic-messages", "");
         let anthropic_protocol = protocol_for("custom", &anthropic).unwrap();
         apply_auth_headers("custom", &anthropic, &anthropic_protocol, &mut headers).unwrap();
         assert_eq!(
             headers,
-            vec![("anthropic-version".into(), "2023-06-01".into())]
+            crate::fields(vec![("anthropic-version".into(), "2023-06-01".into())])
         );
 
         let google = provider("google-gemini", "");

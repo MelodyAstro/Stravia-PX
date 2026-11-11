@@ -379,6 +379,8 @@ pub struct TurnCommit {
     pub redaction_references: Vec<String>,
     /// 节点保存的原生压缩登记 ID；缺失即视为依赖不可用。
     pub compaction_record_ids: Vec<String>,
+    /// Immutable, principal-scoped atomic state snapshot retained by this node.
+    pub atomic_checkpoint_id: Option<String>,
     pub reusable_prefix: Option<ReusablePrefixMetadata>,
 }
 /// Version of the optional controls/client-context exclusion proof. Unknown
@@ -444,6 +446,8 @@ pub enum TurnCommitError {
     AlreadyExists,
     #[error("turn dependency unavailable")]
     DependencyUnavailable,
+    #[error("turn atomic state unavailable")]
+    AtomicStateUnavailable,
     #[error("turn storage failed: {0}")]
     Storage(String),
 }
@@ -456,6 +460,31 @@ pub trait TurnChainStore: Send + Sync {
         kind: TurnNodeKind,
         id: &TurnNodeId,
     ) -> Result<Vec<TurnNode>, TurnUnavailable>;
+
+    /// 返回该 Principal 可见且未过期节点的类型；不存在、过期或不属于该 Principal 时
+    /// 返回 [`TurnUnavailable::Unavailable`]。
+    ///
+    /// 默认实现依次按 [`TurnNodeKind::WebSearch`]、[`TurnNodeKind::Agent`]、
+    /// [`TurnNodeKind::Response`] 试探 [`Self::materialize`]：`Unavailable` 时继续
+    /// 下一种，存储错误直接返回。存储实现应覆盖为一次查询。
+    async fn node_kind(
+        &self,
+        principal: &Principal,
+        id: &TurnNodeId,
+    ) -> Result<TurnNodeKind, TurnUnavailable> {
+        for kind in [
+            TurnNodeKind::WebSearch,
+            TurnNodeKind::Agent,
+            TurnNodeKind::Response,
+        ] {
+            match self.materialize(principal, kind, id).await {
+                Ok(_) => return Ok(kind),
+                Err(TurnUnavailable::Unavailable) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(TurnUnavailable::Unavailable)
+    }
 
     async fn materialize_with_expiry(
         &self,

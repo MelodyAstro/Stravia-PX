@@ -512,78 +512,7 @@ async fn responses_rejects_ambiguous_credentials() {
 }
 
 #[tokio::test]
-async fn responses_compact_requires_valid_authentication() {
-    let (fixture, _) = protected_responses_router().await;
-    let response = fixture
-        .router
-        .clone()
-        .oneshot(
-            Request::post("/v1/responses/compact")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"model":"auth-model","input":"hello"}"#))
-                .expect("compact request"),
-        )
-        .await
-        .expect("compact response");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    drop(response);
-    fixture.close().await;
-}
-
-#[tokio::test]
-async fn responses_compact_authenticates_before_parsing_the_body() {
-    let (fixture, _) = protected_responses_router().await;
-    for (content_type, body) in [
-        ("application/json", "{"),
-        ("text/plain", r#"{"model":"auth-model","input":"hello"}"#),
-    ] {
-        let response = fixture
-            .router
-            .clone()
-            .oneshot(
-                Request::post("/v1/responses/compact")
-                    .header("content-type", content_type)
-                    .body(Body::from(body))
-                    .expect("compact request"),
-            )
-            .await
-            .expect("compact response");
-
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-    fixture.close().await;
-}
-
-#[tokio::test]
-async fn responses_compact_preserves_authorization_failures_before_parsing_the_body() {
-    let (fixture, token) = protected_responses_router_with_key_state(false).await;
-    let response = fixture
-        .router
-        .clone()
-        .oneshot(
-            Request::post("/v1/responses/compact")
-                .header("content-type", "application/json")
-                .header("authorization", format!("Bearer {token}"))
-                .body(Body::from("{"))
-                .expect("compact request"),
-        )
-        .await
-        .expect("compact response");
-
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let body: serde_json::Value = serde_json::from_slice(
-        &to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("compact response body"),
-    )
-    .expect("compact JSON");
-    assert_eq!(body["error"]["code"], "permission_denied");
-    fixture.close().await;
-}
-
-#[tokio::test]
-async fn responses_compact_rejects_streaming_transport_control() {
+async fn legacy_compact_route_is_not_found() {
     let (fixture, token) = protected_responses_router().await;
     let response = fixture
         .router
@@ -592,23 +521,78 @@ async fn responses_compact_rejects_streaming_transport_control() {
             Request::post("/v1/responses/compact")
                 .header("content-type", "application/json")
                 .header("authorization", format!("Bearer {token}"))
-                .body(Body::from(
-                    r#"{"model":"auth-model","input":"hello","stream":true}"#,
-                ))
-                .expect("malformed compact request"),
+                .body(Body::from(r#"{"model":"auth-model","input":"hello"}"#))
+                .expect("legacy compact request"),
         )
         .await
-        .expect("compact response");
+        .expect("legacy compact response");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body: serde_json::Value = serde_json::from_slice(
-        &to_bytes(response.into_body(), usize::MAX)
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn v2_compaction_requires_valid_authentication() {
+    let (fixture, _) = protected_responses_router().await;
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"model":"auth-model","stream":true,"input":[{"role":"user","content":"hello"},{"type":"compaction_trigger"}]}"#,
+                ))
+                .expect("V2 compaction request"),
+        )
+        .await
+        .expect("V2 compaction response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    drop(response);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn v2_compaction_requires_stream_and_one_terminal_trigger() {
+    let (fixture, token) = protected_responses_router().await;
+    for (body, param) in [
+        (
+            r#"{"model":"auth-model","input":[{"role":"user","content":"hello"},{"type":"compaction_trigger"}]}"#,
+            "stream",
+        ),
+        (
+            r#"{"model":"auth-model","stream":true,"input":[{"type":"compaction_trigger"},{"role":"user","content":"hello"}]}"#,
+            "input",
+        ),
+        (
+            r#"{"model":"auth-model","stream":true,"input":[{"type":"compaction_trigger"},{"type":"compaction_trigger"}]}"#,
+            "input",
+        ),
+    ] {
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(
+                Request::post("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::from(body))
+                    .expect("V2 compaction request"),
+            )
             .await
-            .expect("compact response body"),
-    )
-    .expect("compact JSON");
-    assert_eq!(body["error"]["code"], "invalid_request");
-    assert_eq!(body["error"]["param"], "body");
+            .expect("V2 compaction response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("V2 compaction response body"),
+        )
+        .expect("V2 compaction JSON");
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert_eq!(body["error"]["param"], param);
+    }
     fixture.close().await;
 }
 
@@ -742,8 +726,14 @@ async fn responses_websocket_rejects_unknown_event_types() {
     fixture.close().await;
 }
 
-#[tokio::test]
-async fn artifact_upload_is_api_key_scoped_and_completes() {
+struct ArtifactUploadFixture {
+    router: Router,
+    auth: String,
+    gateway: Gateway,
+    data_dir: tempfile::TempDir,
+}
+
+async fn artifact_upload_fixture() -> ArtifactUploadFixture {
     let data_dir = tempfile::tempdir().expect("temp data dir");
     let gateway = Gateway::new(GatewayConfig {
         data_dir: data_dir.path().to_path_buf(),
@@ -768,129 +758,176 @@ async fn artifact_upload_is_api_key_scoped_and_completes() {
         })
         .await
         .expect("API key");
-    let router = create_router(gateway);
-    let auth = format!("Bearer {}", api_key.token);
+    ArtifactUploadFixture {
+        router: create_router(gateway.clone()),
+        auth: format!("Bearer {}", api_key.token),
+        gateway,
+        data_dir,
+    }
+}
 
-    let response = router
+async fn post_artifact(
+    router: &Router,
+    authorization: Option<&str>,
+    content_type: Option<&str>,
+    body: Body,
+) -> axum::response::Response {
+    let mut request = Request::post("/v1/artifacts");
+    if let Some(value) = authorization {
+        request = request.header("authorization", value);
+    }
+    if let Some(value) = content_type {
+        request = request.header("content-type", value);
+    }
+    router
         .clone()
-        .oneshot(
-            Request::post("/v1/artifacts/uploads")
-                .header("content-type", "application/json")
-                .header("authorization", &auth)
-                .body(Body::from(r#"{"mime_type":"image/png","size":3}"#))
-                .expect("upload request"),
-        )
+        .oneshot(request.body(body).expect("upload request"))
         .await
-        .expect("upload response");
+        .expect("upload response")
+}
+
+async fn response_json(response: axum::response::Response) -> serde_json::Value {
+    serde_json::from_slice(
+        &to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body"),
+    )
+    .expect("response JSON")
+}
+
+async fn upload_ok(
+    router: &Router,
+    auth: &str,
+    content_type: &str,
+    bytes: Vec<u8>,
+) -> serde_json::Value {
+    let response = post_artifact(router, Some(auth), Some(content_type), Body::from(bytes)).await;
     assert_eq!(response.status(), StatusCode::CREATED);
-    let upload: stravia_runtime_contract::artifact::ArtifactUpload = serde_json::from_slice(
-        &to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("upload body"),
-    )
-    .expect("Artifact upload");
-
-    let response = router
-        .clone()
-        .oneshot(
-            Request::put(format!(
-                "/v1/artifacts/uploads/{}/parts/1",
-                upload.upload_id
-            ))
-            .header("authorization", &auth)
-            .header("x-upload-token", &upload.upload_token)
-            .body(Body::from("png"))
-            .expect("part request"),
-        )
-        .await
-        .expect("part response");
-    assert_eq!(response.status(), StatusCode::OK);
-    let part: stravia_runtime_contract::artifact::UploadedArtifactPart = serde_json::from_slice(
-        &to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("part body"),
-    )
-    .expect("Artifact part");
-
-    let response = router
-        .oneshot(
-            Request::post(format!(
-                "/v1/artifacts/uploads/{}/complete",
-                upload.upload_id
-            ))
-            .header("content-type", "application/json")
-            .header("authorization", auth)
-            .body(Body::from(
-                serde_json::json!({
-                    "upload_token": upload.upload_token,
-                    "parts": [part],
-                })
-                .to_string(),
-            ))
-            .expect("complete request"),
-        )
-        .await
-        .expect("complete response");
-    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
 }
 
 #[tokio::test]
-async fn artifact_create_upload_response_hides_the_artifact_identity() {
-    let data_dir = tempfile::tempdir().expect("temp data dir");
-    let gateway = Gateway::new(GatewayConfig {
-        data_dir: data_dir.path().to_path_buf(),
-        ..Default::default()
-    })
-    .await
-    .expect("Gateway");
-    let api_key = gateway
-        .admin()
-        .create_api_key(crate::db::models::CreateApiKey {
-            key: None,
-            name: "Artifact create key".into(),
-            rpm_limit: None,
-            expires_at: None,
-            mcp_access_enabled: false,
-            transparent_injection_enabled: false,
-            inject_web_search: false,
-            inject_media_generation: false,
-            model_ids: vec![],
-            inject_media_understanding: false,
-            spend_limit: None,
-        })
-        .await
-        .expect("API key");
-    let response = create_router(gateway)
-        .oneshot(
-            Request::post("/v1/artifacts/uploads")
-                .header("content-type", "application/json")
-                .header("authorization", format!("Bearer {}", api_key.token))
-                .body(Body::from(r#"{"mime_type":"image/png","size":3}"#))
-                .expect("upload request"),
-        )
-        .await
-        .expect("upload response");
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let body: serde_json::Value = serde_json::from_slice(
-        &to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("upload body"),
-    )
-    .expect("upload JSON");
+async fn artifact_upload_streams_raw_bytes_and_returns_the_stable_path() {
+    let fixture = artifact_upload_fixture().await;
+
+    let body = upload_ok(&fixture.router, &fixture.auth, "image/png", b"png".to_vec()).await;
+
     let fields = body.as_object().expect("upload JSON object");
-    for required in ["upload_id", "upload_token", "expires_at"] {
+    let mut keys: Vec<_> = fields.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["mime_type", "path", "size"]);
+    assert_eq!(body["mime_type"], "image/png");
+    assert_eq!(body["size"], 3);
+    stravia_runtime_contract::artifact::ArtifactId::from_reference(
+        body["path"].as_str().expect("Artifact path"),
+    )
+    .expect("path resolves to an Artifact identity");
+}
+
+#[tokio::test]
+async fn artifact_upload_keeps_the_file_for_the_configured_retention() {
+    let fixture = artifact_upload_fixture().await;
+    fixture
+        .gateway
+        .storage
+        .settings()
+        .set("log_retention_days", "1")
+        .await
+        .expect("retention setting");
+
+    let before = chrono::Utc::now().timestamp_millis();
+    let body = upload_ok(&fixture.router, &fixture.auth, "image/png", b"png".to_vec()).await;
+    let after = chrono::Utc::now().timestamp_millis();
+
+    let id = stravia_runtime_contract::artifact::ArtifactId::from_reference(
+        body["path"].as_str().expect("Artifact path"),
+    )
+    .expect("Artifact identity");
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(fixture.data_dir.path().join("db").join("gateway.db")),
+    )
+    .await
+    .expect("gateway database");
+    let expires_at: i64 = sqlx::query_scalar("SELECT expires_at FROM artifacts WHERE id = ?")
+        .bind(id.as_str())
+        .fetch_one(&pool)
+        .await
+        .expect("Artifact expiry");
+    pool.close().await;
+    let day = 86_400_000;
+    assert!(
+        (before + day..=after + day).contains(&expires_at),
+        "upload must follow log_retention_days, got expiry {expires_at} for upload in [{before}, {after}]"
+    );
+}
+
+#[tokio::test]
+async fn artifact_upload_requires_the_file_mime_as_content_type() {
+    let fixture = artifact_upload_fixture().await;
+
+    for content_type in [
+        None,
+        Some(""),
+        Some("application/x-www-form-urlencoded"),
+        Some("Application/X-WWW-Form-Urlencoded; charset=utf-8"),
+        Some("multipart/form-data; boundary=x"),
+        Some("MULTIPART/mixed"),
+    ] {
+        let response = post_artifact(
+            &fixture.router,
+            Some(&fixture.auth),
+            content_type,
+            Body::from("png"),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Content-Type {content_type:?}"
+        );
+        let body = response_json(response).await;
         assert!(
-            fields.contains_key(required),
-            "create upload must still return {required}: {body}"
+            body["error"]["message"].is_string(),
+            "415 must carry a JSON error: {body}"
         );
     }
-    assert!(stravia_runtime_contract::identifier::valid_id(
-        fields["upload_id"].as_str().expect("upload_id string")
-    ));
+}
+
+#[tokio::test]
+async fn artifact_upload_rejects_anonymous_requests_before_reading_the_body() {
+    let fixture = artifact_upload_fixture().await;
+    let polled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = polled.clone();
+    let body = Body::from_stream(futures::stream::poll_fn(move |_| {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        std::task::Poll::Ready(None::<Result<bytes::Bytes, std::io::Error>>)
+    }));
+
+    let response = post_artifact(&fixture.router, None, Some("image/png"), body).await;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert!(
-        !fields.contains_key("artifact_id"),
-        "the final Artifact identity must not be exposed before completion"
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/json"))
     );
+    assert!(response_json(response).await["error"].is_object());
+    assert!(
+        !polled.load(std::sync::atomic::Ordering::SeqCst),
+        "the request body must not be read before authentication"
+    );
+
+    let wrong_key = post_artifact(
+        &fixture.router,
+        Some("Bearer sk-not-a-real-key"),
+        Some("image/png"),
+        Body::from("png"),
+    )
+    .await;
+    assert_eq!(wrong_key.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -923,126 +960,11 @@ async fn artifact_repeated_http_uploads_keep_one_identity_and_download() {
     let auth = format!("Bearer {}", api_key.token);
     let router = create_router(gateway.clone());
 
-    async fn create_upload_session(router: &Router, auth: &str, size: u64) -> (String, String) {
-        let response = router
-            .clone()
-            .oneshot(
-                Request::post("/v1/artifacts/uploads")
-                    .header("content-type", "application/json")
-                    .header("authorization", auth)
-                    .body(Body::from(
-                        serde_json::json!({"mime_type": "image/png", "size": size}).to_string(),
-                    ))
-                    .expect("upload request"),
-            )
-            .await
-            .expect("upload response");
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body: serde_json::Value = serde_json::from_slice(
-            &to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("upload body"),
-        )
-        .expect("upload JSON");
-        (
-            body["upload_id"].as_str().expect("upload_id").to_owned(),
-            body["upload_token"]
-                .as_str()
-                .expect("upload_token")
-                .to_owned(),
-        )
-    }
-
-    async fn put_part(
-        router: &Router,
-        auth: &str,
-        upload_id: &str,
-        upload_token: &str,
-        part_number: u32,
-        chunk: &'static [u8],
-    ) -> stravia_runtime_contract::artifact::UploadedArtifactPart {
-        let response = router
-            .clone()
-            .oneshot(
-                Request::put(format!(
-                    "/v1/artifacts/uploads/{upload_id}/parts/{part_number}"
-                ))
-                .header("authorization", auth)
-                .header("x-upload-token", upload_token)
-                .body(Body::from(chunk.to_vec()))
-                .expect("part request"),
-            )
-            .await
-            .expect("part response");
-        assert_eq!(response.status(), StatusCode::OK);
-        serde_json::from_slice(
-            &to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("part body"),
-        )
-        .expect("part JSON")
-    }
-
-    async fn complete_upload_session(
-        router: &Router,
-        auth: &str,
-        upload_id: &str,
-        upload_token: &str,
-        parts: &[stravia_runtime_contract::artifact::UploadedArtifactPart],
-    ) -> serde_json::Value {
-        let response = router
-            .clone()
-            .oneshot(
-                Request::post(format!("/v1/artifacts/uploads/{upload_id}/complete"))
-                    .header("content-type", "application/json")
-                    .header("authorization", auth)
-                    .body(Body::from(
-                        serde_json::json!({
-                            "upload_token": upload_token,
-                            "parts": parts,
-                        })
-                        .to_string(),
-                    ))
-                    .expect("complete request"),
-            )
-            .await
-            .expect("complete response");
-        assert_eq!(response.status(), StatusCode::OK);
-        serde_json::from_slice(
-            &to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("complete body"),
-        )
-        .expect("complete JSON")
-    }
-
-    // First upload session: a single part carrying the whole picture.
-    let (first_upload, first_token) =
-        create_upload_session(&router, &auth, bytes.len() as u64).await;
-    let first_part = put_part(&router, &auth, &first_upload, &first_token, 1, bytes).await;
-    let first =
-        complete_upload_session(&router, &auth, &first_upload, &first_token, &[first_part]).await;
-
-    // Second upload session for the same picture: a fresh upload identity with
-    // different chunk boundaries.
-    let (second_upload, second_token) =
-        create_upload_session(&router, &auth, bytes.len() as u64).await;
-    assert_ne!(first_upload, second_upload, "upload sessions stay random");
-    let (head, tail) = bytes.split_at(bytes.len() / 2);
-    let part_one = put_part(&router, &auth, &second_upload, &second_token, 1, head).await;
-    let part_two = put_part(&router, &auth, &second_upload, &second_token, 2, tail).await;
-    let second = complete_upload_session(
-        &router,
-        &auth,
-        &second_upload,
-        &second_token,
-        &[part_one, part_two],
-    )
-    .await;
-
+    let first = upload_ok(&router, &auth, "image/png", bytes.to_vec()).await;
+    let second = upload_ok(&router, &auth, "image/png", bytes.to_vec()).await;
     assert_eq!(
         first["path"], second["path"],
-        "identical uploads must complete to one final Artifact identity: first={first} second={second}"
+        "identical uploads must resolve to one final Artifact identity: first={first} second={second}"
     );
     assert!(first.get("id").is_none());
     assert!(first.get("reference").is_none());

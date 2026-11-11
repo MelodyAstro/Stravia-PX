@@ -1,4 +1,4 @@
-name: PX Native Linux
+name: Strinova Native Linux
 
 on:
   workflow_dispatch:
@@ -85,7 +85,7 @@ jobs:
           cache-targets: 'true'
           cache-all-crates: 'true'
           cache-on-failure: 'true'
-          cache-bin: 'false'
+          cache-bin: 'true'
           save-if: 'false'
 
       # Reuse the exact backend-source cache verified by Platform Plugins.
@@ -93,12 +93,12 @@ jobs:
       - name: Cache platform workspace compilation
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: px-platform-workspace-v1-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'backend/**', 'frontend/stravia-webui/src/assets/icons/*.svg') }}
+          shared-key: px-platform-workspace-v1-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', 'backend/**', 'patches/**', 'frontend/stravia-webui/src/assets/icons/*.svg') }}
           cache-targets: 'true'
           cache-all-crates: 'true'
           cache-workspace-crates: 'true'
           cache-on-failure: 'true'
-          cache-bin: 'false'
+          cache-bin: 'true'
 
       - name: Set up pinned Bun
         uses: oven-sh/setup-bun@v2
@@ -114,7 +114,7 @@ jobs:
         id: compiled-tools
         uses: actions/cache/restore@v5
         with:
-          key: px-tools-v1-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('.github/workflows/px-native-linux.yml', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', 'backend/crates/stravia-vendor-*/**', 'backend/crates/stravia-runtime-contract/**', 'backend/crates/stravia-protocol-codec/**', 'backend/crates/stravia-core/assets/providers.stravia.json', 'frontend/stravia-webui/src/assets/icons/*.svg', 'px/ops/ci-tools-cache.py') }}
+          key: px-tools-v1-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST_VERSION }}-${{ hashFiles('.github/workflows/px-native-linux.yml', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'patches/**', '.cargo/config.toml', 'backend/crates/stravia-vendor-*/**', 'backend/crates/stravia-runtime-contract/**', 'backend/crates/stravia-protocol-codec/**', 'backend/crates/stravia-core/assets/providers.stravia.json', 'frontend/stravia-webui/src/assets/icons/*.svg', 'px/ops/ci-tools-cache.py') }}
           path: |
             target/debug/stravia-build-vendors
             target/vendor-plugins
@@ -122,6 +122,9 @@ jobs:
             target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm
             target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm
             target/px-tools-cache.json
+
+      - name: Prepare patched upstream dependencies
+        run: task prepare:crates
 
       - name: Verify cached binaries
         if: steps.compiled-tools.outputs.cache-hit == 'true'
@@ -179,7 +182,7 @@ jobs:
           cargo test --locked --release -p stravia-vendor-common --lib identity::tests
           cargo test --locked --release -p stravia-vendor-codex -p stravia-vendor-claudecode --lib
           STRAVIA_CLAUDECODE_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_claudecode.wasm" cargo test --locked --release -p stravia-vendor-claudecode --test contract official_identity_sync -- --ignored
-          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib vendor_transport -- --test-threads=1
+          cargo test --locked --release --config profile.release.package.stravia-core.opt-level=0 --config profile.release.package.stravia-core.codegen-units=16 -p stravia-core --lib plugin::network::shape -- --test-threads=1
 
       - name: Verify Core plugin lifecycle and compatibility regressions
         if: inputs.tools_only != true
@@ -209,11 +212,11 @@ jobs:
       - name: Verify compiled-tool cache checkpoint
         run: python3 px/ops/ci-tools-cache.py verify
 
-      - name: Upload private native package
+      - name: Upload native package
         if: inputs.tools_only != true
         uses: actions/upload-artifact@v4
         with:
-          name: stravia-px-linux-x86_64-gnu-${{ github.sha }}
+          name: strinova-linux-x86_64-gnu-${{ github.sha }}
           path: dist/px-native/*
           if-no-files-found: error
           compression-level: 0

@@ -29,6 +29,7 @@ use stravia_vendor_sdk::{
 const VENDOR_ID: &str = "antigravity";
 const CHANNEL: &str = "oauth";
 const BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
+const CLI_USER_AGENT: &str = "antigravity/cli/1.5.2 (aidev_client; os_type=linux; arch=amd64; cl=1015175089; auth_method=consumer)";
 
 pub fn descriptor() -> VendorDescriptor {
     let capabilities = BTreeSet::from([
@@ -40,6 +41,7 @@ pub fn descriptor() -> VendorDescriptor {
         Capability::ConfigValidation,
     ]);
     VendorDescriptor {
+        egress_shapes: Vec::new(),
         vendor_id: VENDOR_ID.into(),
         version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.cc.2")).expect("valid package version"),
         display_name: "Antigravity".into(),

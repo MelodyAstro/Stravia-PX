@@ -130,7 +130,7 @@ baseline 与 optimized 使用同脚本、seed、case 顺序、token/图片/时�
 |媒体与协议编码|嵌套工具媒体从借用 JSON 反序列化，移走 Responses 的单次使用原生元数据；Data URL 解析和生成复用 owned String，并精确预留前缀空间，避免容量翻倍|删除或插入前缀仍会搬动字节；Base64 与最终协议 JSON 仍是新表示。不能仅把 IR 改为 `Arc<String>`、再在最终 `Value::String` 处复制，冒充消除了复制|
 |Debug Wire|`WirePayload` 共享已有 `Bytes`，直接序列化 UTF-8；无效 UTF-8 的 Base64 通过显示编码器写入最终 JSON，不创建等长中间 String|Trace **仍在入队前同步编码**，队列只保留并计量最终 Vec，不把小 Bytes 切片及其大 backing 长期留在队列。Authorization 掩码、Header UTF-8 表示、捕获上限与 writer 错误保持原边界|
 |普通可见正文观测|ledger/终态保留 `Arc<String>`，通过 `RunObserver::record_visible_delta(&str)` 把借用正文交给现有脱敏器；普通脱敏逐阶段复用未变化的 `Cow<str>`，只在真实替换处建立输出，ASCII scheme 比较不再逐词创建小写 String|脱敏后的内容、未完成秘密片段和持久化独立表示仍需拥有缓冲；引用原子、空白、已掩码字段和分隔符保真保持不变；没有把大正文 clone 延后到 writer 来宣称优化|
-|SSE、Connect 与 WebSocket|四类公共协议共享借用分帧，部分帧只保留尾部并集中压紧；Devin 未压缩帧借用、Kilo 单行 data 借用；客户端 SSE→WebSocket 直接共享 `Bytes` 帧切片|跨 chunk 拼接、gzip 解压和协议 JSON 重建仍需分配。部分上游 WebSocket `Text(String)` 抓取仍需现有 owned 事件接口要求的独立快照，不计作零拷贝收益|
+|SSE、Connect 与 WebSocket|四类公共协议共享借用分帧，部分帧只保留尾部并集中压紧；Devin 未压缩帧借用；客户端 SSE→WebSocket 直接共享 `Bytes` 帧切片|跨 chunk 拼接、gzip 解压和协议 JSON 重建仍需分配。部分上游 WebSocket `Text(String)` 抓取仍需现有 owned 事件接口要求的独立快照，不计作零拷贝收益|
 |历史存储|借用 envelope 字段进行序列化，RAW 解码返回 `Cow` 借用，RAW 编码复用 owned Vec；SQLx 接管 owned payload，最后一个恢复 slot 移走可独占的 Value|重复 slot 或仍被缓存持有的 Value 需要独立副本；zstd 解压需要新输出。唯一内容仍先无分配计长/哈希，避免为了“一次遍历”先物化所有重复内容|
 |Trace 分段存储与读取|借用已编码正文的 `RawValue`，消除 `Vec→Value/String→Vec→最终记录` 的正文重复物化；只有可缓存且首次出现的正文才建立缓存副本，超出缓存总预算的记录不再计算无用的缓存摘要；按既有编码长度预留输出容量；读取时移动已有 JSON 子树|分段格式、引用偏移、8MiB 缓存边界和解码值不变。这里跳过的是不可能进入缓存的 Debug 记录摘要，不是 canonical 或持久化内容指纹|
 
@@ -828,3 +828,31 @@ DATA_DIR=DIR tests/common/adr0089_measure.sh sweep BINARY LABEL           # 新�
 - 升级墙钟在两次重复间波动很大（SQLite 74–109 s，PostgreSQL 87–138 s），原因未查明，各阶段（内容、保留期回填、Observation 规范化）没有单独计时。
 - 工具流没有复制 e2e 的 bundle 下载检查、`omitted-tool-whitespace` 与 alternating 流模式。
 - 早期在 `7cbc0714`（Observation 使用裸 id 作用域）上的 smoke 只用于验证脚本，其数字不进入任何表。
+
+## 2026-11-08 Vendor Net/State 迁移：真实 HTTP 有限样本对比
+
+固定基线为 `bc63b1348d4253f56668d998934de1512226766a`，候选为本次迁移的工作树；两侧均为 `release no-default-features test-harness`。在其它构建和 HTTP 测试结束后，先运行基线，再运行候选，不并行测量。二进制 SHA-256 分别为 `7d83039a938fcc43b1f516ad01b786bfed4c66c370c516ab0c384edc560a43e4` 和 `de6b49a6579918a5e12ead90399935a41db644287c8910cb51d8963ee2a94af1`。
+
+本轮仅测 Responses 入站 × 四种上游协议 × unary/stream，共 8 个 case；每个 case 单 worker 连续两轮，没有预热。输入仍为 50,000–150,000 tokens、0–10 张 512×512 图片；上游首 token 延迟固定 1 秒，以 30 token/s 生成 10 秒。seed=1、采样间隔 0.25 秒，Debug、普通观测、历史与可逆凭据保护全部开启。两侧各 16 个真实请求全部完成并通过完整链路和凭据审计，比较命令退出码 0。
+
+可复验的共同负载参数如下；每侧使用不同的 `--binary`、`--label`、`--output`，脚本各自创建并清理独立 SQLite 数据目录：
+
+```sh
+uv run --locked --group test python -m tests.common.measure_protocol_http --binary BINARY --label LABEL --output RESULT.json --ingress open-responses --upstream openai-chat open-responses anthropic-messages google-content --delivery unary stream --mode fixed-workers --warmup 0 --concurrency 1 --requests-per-case 2 --seed 1 --chain-turns 2 --min-first-token-delay 1 --max-first-token-delay 1 --min-duration 10 --max-duration 10 --min-tokens-per-second 30 --max-tokens-per-second 30 --build-condition "release no-default-features test-harness"
+uv run --locked --group test python -m tests.common.report_protocol_http target/test-results/vendor-net/perf-baseline-paired.json target/test-results/vendor-net/perf-candidate.json --output target/test-results/vendor-net/perf-comparison.csv
+```
+
+下表均为实测值，RSS 使用十进制 MB；延迟单位为 ms。每个 case 仅两个请求，因此这里的 p95 实际取两者较大值，不是稳定尾延迟估计。
+
+|上游 / 交付|基线 RSS 峰值|候选 RSS 峰值|基线端到端 p95|候选端到端 p95|基线 TTFT p95|候选 TTFT p95|
+|---|---:|---:|---:|---:|---:|---:|
+|Chat / unary|618.127|670.003|11407.998|11312.698|—|—|
+|Chat / stream|659.505|736.498|11450.243|11288.987|1369.791|1211.423|
+|Responses / unary|605.716|692.802|11284.329|11193.610|—|—|
+|Responses / stream|628.457|702.063|11253.733|11211.503|1180.861|1150.160|
+|Anthropic / unary|677.245|712.847|11450.843|11288.861|—|—|
+|Anthropic / stream|667.357|686.121|11351.293|11274.286|1283.385|1206.425|
+|Gemini / unary|690.323|689.291|11385.910|11310.738|—|—|
+|Gemini / stream|676.581|730.534|11434.638|11300.614|1357.886|1230.587|
+
+结论：此样本的交付延迟略低，但最大 RSS 从 690.323 MB 增至 736.498 MB（约 +6.69%），不能宣称更省内存。单 worker 的完成率受固定上游生成时间主导；CPU p50 均为零，稀疏 p95 不能证明稳态 CPU 成本降低。这是包含新增持久状态与协议行为的整套实现对比，不是 Rama 与 reqwest 的独立微基准，也不构成完整 64-case 或高并发性能验收。未设置内存预算；比较器的 `meets_target=true` 只表示本轮运行与完整链路有效。
