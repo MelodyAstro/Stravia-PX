@@ -1,152 +1,29 @@
-# Strinova
+# Strinova maintenance
 
-Strinova 的补丁与原生部署维护记录。源码基线为官方 **v0.6.5**
-（`42348db6d7fbad32f9bcf56d94fded8a2ec17ec4`），保留上游源码历史及 AGPL-3.0-only 许可证。
+Strinova is based on [StraviaPlatform v0.6.5](https://github.com/Stravia-AI/StraviaPlatform), with upstream attribution and the AGPL-3.0-only license preserved.
 
-改版在本仓库 `main` 维护，`upstream` 指向官方。插件拆分与宿主补丁边界见
-[插件维护说明](PLUGIN-MAINTENANCE.md)；v0.6.4 的历史状态见
-[自定义工具修复与 Team 部署记录](DEPLOYMENT-custom-tools.md)，备份与清理见 [恢复说明](RECOVERY.md)。
+The fork adds Claude Code compatibility controls, Codex Responses/custom tools, per-Key model aliases, platform plugins, client identity configuration, account reset controls, estimated site spending limits, and OAuth credential migration.
 
-Claude、Codex 和 GA 的服务端身份、自定义 UA 与 TLS，以及官方客户端版本同步见
-[v0.6.5 上游请求身份配置](OUTBOUND-IDENTITY-v0.6.5.md)。
-账号重置次数、手动 reset 和本站累计消费上限见 [账号额度控制](ACCOUNT-CONTROLS.md)。
-消费上限默认关闭，缺少逐次扣费明细时按官方费率保守估算，并与官方余额分开显示。
-Codex 多格式凭据导入、Antigravity/Google RT JSON 备份和 CI 保留策略见
-[凭据迁移说明](CREDENTIAL-IMPORT.md)。
+- [Plugin boundaries and upgrades](PLUGIN-MAINTENANCE.md)
+- [Platform plugins](PLATFORM-PLUGINS.md)
+- [Request model aliases](REQUEST-MODELS.md)
+- [Client identity and TLS](OUTBOUND-IDENTITY-v0.6.5.md)
+- [Account reset and spending controls](ACCOUNT-CONTROLS.md)
+- [Credential import and RT backup](CREDENTIAL-IMPORT.md)
+- [Native CI builds and caches](CI-BUILDS.md)
+- [Native deployment runbook](PLATFORM-PLUGIN-DEPLOYMENT.md)
+- [Public-source privacy rules](PRIVACY.md)
 
-## 当前补丁
+Use the domain configured by your administrator. For a site configured with the optional public prefixes:
 
-- **通用平台插件**：独立 Wasm 组件安装、热更新和配置，支持请求/响应/工具结果钩子、
-  平台工具、MCP 与 Agent 工具；首次升级宿主后，兼容插件更新无需重编主程序。
-  管理和开发方法见 [平台插件](PLATFORM-PLUGINS.md)。
-- **GA / Claude Code**：保留 `claude_code_compat` 开关，只作用于 Antigravity 的
-  `claude-*` 模型；保留工具参数 JSON Schema，兼容 system 文本投影。组件版本为
-  `0.6.5+masub.cc.2`（本分支源码）。Gemini 的投影不变。
-- **Codex Responses**：接受、校验并原位保留 `additional_tools`，完整传递 namespace、
-  函数 schema、自定义工具格式和位置。主程序及 Codex 插件必须同时更新；仅更新其中
-  一个会继续拒绝请求或丢失工具定义。组件版本为 `0.6.5+masub.responses.3`（本分支源码）。
-  同时支持原生 `custom_tool_call`、自由文本输入增量和工具结果回传；无法表达这些语义的跨协议目标会明确拒绝。
-- 保留 v0.6.4 的签名思考块顺序修复，并适配 v0.6.5 的后缀请求钩子、原子插件状态和 Rama/TLS 传输。
-  更新宿主接口时同时重建受影响组件；CI 会导出可复现的四层源码 patch。
-- **请求模型映射**：按 Key 配置自定义客户端名称，支持限时识别实际模型名与协议并
-  生成候选；目标仍需通过原有权限检查。见 [配置与识别说明](REQUEST-MODELS.md)。
+| Surface | Example |
+| --- | --- |
+| OpenAI HTTP Base | `https://gateway.example.com/comments` |
+| Responses WebSocket | `wss://gateway.example.com/comments/responses` |
+| Anthropic Base | `https://gateway.example.com/reviews` |
 
-Private 内部路由使用 `private/`，Team 使用 `team/`。启用 Key 的请求映射后，客户端可
-使用 `gpt-6-luna` 等短名称，无需使用内部前缀。
-客户端 Base URL 的 OpenAI 前缀为 `/comments`，Anthropic 前缀为 `/reviews`。
+The paths are reverse-proxy configuration examples. The native host's canonical protocol paths remain available on its configured listener. With request mapping enabled, separate Keys can map the same short model name to different authorized routes; isolation is still enforced.
 
-| 入口 | OpenAI HTTP Base URL | GPT Responses WebSocket 完整地址 |
-| --- | --- | --- |
-| 主域名 | `https://gateway.example.com/comments` | `wss://gateway.example.com/comments/responses` |
-| Cloudflare | `https://gateway.example.com/comments` | `wss://gateway.example.com/comments/responses` |
+CI produces a source-bound native GNU package, independent Wasm components, complete source patch, four reviewable patch layers, a build manifest and checksums. Native deployment does not require Docker; Alpine needs a compatible isolated GNU runtime. Keep the complete data snapshot and its matching previous program for rollback.
 
-WebSocket 沿用原分组 Key（`Authorization: Bearer <Key>`）和短模型名，如 `gpt-6-luna`。
-客户端若只提供 HTTP Base URL 配置，仍填写 HTTPS Base；上表 WSS 为完整 Responses 端点。
-两条 WSS 入口均已验证完整响应和工具结果往返。服务端到上游的独立地址及修复说明见 [上游 WebSocket](UPSTREAM-WEBSOCKET.md)。
-
-## 原生构建
-
-后续构建使用 [GitHub Actions 原生构建](CI-BUILDS.md)，直接下载带提交和 SHA 校验的产物。
-
-遵循上游 `AGENTS.md`、`rust-toolchain.toml` 和 `Taskfile.yml`。构建不需要 Docker：
-
-```sh
-# 安装固定版本 Rust、Bun 和 Task；准备 wasm32-wasip2 目标。
-rustup target add wasm32-wasip2
-
-# v0.6.5 协议回归；当前执行 667 个测试。
-cargo test --locked -p stravia-protocol-codec --lib
-
-# 上游标准流程生成 WebUI、内嵌 Base 组件和原生主程序。
-task build:server
-
-# 身份配置使用匹配的主程序及三个独立组件。
-cargo build --locked --release --lib --target wasm32-wasip2 \
-  -p stravia-vendor-antigravity -p stravia-vendor-codex -p stravia-vendor-claudecode
-```
-
-内存有限的构建机器应设置 `CARGO_BUILD_JOBS=1`。Linux GNU 产物的 glibc 要求须与
-目标运行库匹配；本实例使用 Alpine/OpenRC 和独立 GNU 运行库，以非 root 用户运行。
-原生服务不通过 Docker 部署。
-
-## 升级和恢复
-
-`ops/stravia-maint.py` 部署为 `/usr/local/sbin/stravia-maint`。账号读取助手为
-`/root/stravia-client.py`；它从服务器 root 私有文件读取管理账号。仓库不包含账号、
-API Key、OAuth 凭据、生产数据库、真实聊天请求、Debug Trace 或完整备份。
-
-```sh
-stravia-maint backup
-stravia-maint upgrade vX.Y.Z
-stravia-maint restore /var/backups/stravia/<snapshot>.tar.gz
-stravia-cc-compat status
-stravia-cc-compat on
-stravia-cc-compat off
-```
-
-先阅读目标官方版本变更，再将补丁重放到目标源码，并重建、测试主程序与插件。升级
-必须保留账号隔离和分组 Key。新主程序及插件就绪后还需验证完整 HTTP/SSE、WebSocket
-响应，以及工具调用/结果往返；握手成功不能替代完整响应验证。
-
-GA 补丁清单位于 `/opt/stravia/compat/manifest.json`，目标版本组件放在
-`/opt/stravia/compat/staged/vX.Y.Z/`。Responses 清单位于
-`/opt/stravia/responses-compat/manifest.json`，目标主程序和 Codex 组件放在对应的
-`staged/vX.Y.Z/`。维护工具验证文件摘要、创建完整数据快照、切换程序并安装补丁；失败
-时恢复数据与旧程序指针。不得仅切换旧程序读取较新的数据库。
-
-Responses 目标目录至少包含主程序、Codex Wasm、`source.patch` 和 `manifest.json`：
-
-```json
-{
-  "upstream_tag": "vX.Y.Z",
-  "vendor_id": "openai-codex",
-  "version": "X.Y.Z+masub.responses.1",
-  "host_binary": "stravia-server",
-  "host_sha256": "<SHA-256>",
-  "component": "stravia-vendor-openai-codex.wasm",
-  "sha256": "<SHA-256>",
-  "source_patch_sha256": "<SHA-256>",
-  "features": ["positional_additional_tools", "per_key_request_model_mapping_v1"]
-}
-```
-
-主程序在同一文件系统内以硬链接切入版本目录，避免重复占用一份程序。
-已验证的官方压缩包可转存运维机冷存储；展开的未使用官方主程序会移除。
-服务器保留当前版本及最近一次升级所需的完整回滚对；更早的程序和快照经摘要校验后转存本地冷存储。
-恢复历史快照前须先还原对应程序，详见部署记录。
-快照保留运行中的数据、补丁组件、源码差异及清单；可重建的 `staged/` 候选目录不进入
-快照，避免恢复旧版本时又展开一份候选程序。
-
-若没有匹配目标版本的补丁对，维护工具会在修改运行状态前停止。官方以后修复了相同
-问题时，仍须确认主程序和插件均支持相同语义，再准备目标清单。
-活动清单若含 `features`，目标清单必须包含全部相同标记；模型映射标记为
-`per_key_request_model_mapping_v1`。完整备份包含映射配置，限时识别记录不会持久化。
-
-## 验证与隐私
-
-v0.6.5 的 CI 包含协议、身份与 TLS、真实 Wasm reset、账号额度并发、管理接口和双数据库 HTTP 升级验收。
-具体通过状态以该提交的 CI 和部署报告为准。以下为 v0.6.4 的历史验证记录：
-
-- v0.6.4 的 643 个协议测试及 7 个 GA 兼容测试通过。
-- 9 项隔离升级测试覆盖补丁保留、首次安装、摘要篡改、其它插件更新、映射功能标记及失败回退。
-- 3 项隔离恢复测试覆盖元数据同步、补丁出现前的快照及篡改检查。
-- 快照测试验证活动数据与补丁文件完整保留，候选缓存排除，摘要与旧程序指针有效。
-- v0.6.4 已实际部署，完整 Codex HTTP/WebSocket、非默认命名空间工具往返、Claude
-  两种模型及工具往返均通过；Gemini 也完整返回。详见
-  [部署验证与回退记录](DEPLOYMENT-v0.6.4.md)，包含真实耗时和验证范围。
-
-临时 Debug 必须限时开启并恢复关闭，只报告字段/类型和测试状态；完成后清理临时
-原始请求副本。真实请求内容和密钥不进入 Git。
-
-复验脚本默认生成合成请求，依次验证完整 HTTP、WebSocket 和非默认命名空间工具往返。
-在已有 root 私有凭据文件的运维环境运行，会实际调用 GPT-Private 上游：
-
-```sh
-python3 px/ops/verify-responses-streams.py --host <服务域名> --model gpt-6-luna
-```
-
-`--access-file` 可指定私有账号文件，`--report` 指定仅含状态/类型/耗时的报告。
-可选 `--fixture` 用于临时重放私有捕获，脚本只修正模型名，不输出正文；文件不应进入 Git，
-用完应删除。无需开启 Debug。
-
-协议依据：[OpenAI additional_tools](https://developers.openai.com/api/docs/guides/tools-tool-search)。
+Public documentation contains examples only. Actual domains, SSH endpoints, account identifiers, production topology, backup inventories and credentials belong in private operational storage. The public runbooks do not describe any specific deployment's current state.

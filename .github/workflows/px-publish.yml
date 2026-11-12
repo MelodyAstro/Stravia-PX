@@ -31,6 +31,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NATIVE_RUN_ID: ${{ inputs.run_id }}
         run: |
+          python3 px/ops/check-public-source.py
           python3 px/ops/publish-native-release.py --verify-run
       - uses: actions/download-artifact@v4
         with:

@@ -91,44 +91,8 @@ Responses 受管理主程序的 manifest 增加：
 后续 staged 主程序必须保留活动 manifest 的全部 feature 标记，摘要和源码差异也必须
 匹配。维护工具在修改运行状态前拒绝缺项，避免只保留协议补丁却丢掉云端映射。
 
-## 运维脚本
+## 验证和升级
 
-- `ops/package-request-models.py --repository <checkout> --output-directory <private-dir>`
-  打包 GNU 主程序和构建出的不可变网页资源；`--tests` 打包隔离测试二进制。
-- `ops/run-native-request-model-tests.py` 在本实例独立 GNU 运行库中运行九项测试，
-  使用临时数据库和本地模拟上游，不调用生产账号。测试包经分片传输后，以只读
-  SquashFS 挂载运行，避免展开大型测试二进制；挂载和临时目录在结束时清理。
-  需先准备 root 私有测试产物清单，以及临时 `squashfs-tools-ng` 和内核模块。
-- `ops/deploy-v064-request-models.py` 是本次 v0.6.4 的一次性切换脚本，校验旧版本、
-  摘要和功能标记，完整备份后再切换；失败恢复。它不是通用未来版本升级入口。
-- `ops/verify-request-models-live.py` 在本实例用合成请求验证短名称、临时自定义名称、
-  两域名 HTTP/WebSocket 与工具往返、权限、识别和静态资源。会实际调用上游；
-  需同目录对应脚本在服务器命名为 `/root/verify-stravia-responses-streams.py`，
-  以及既有 root 私有认证助手和凭据。完成后恢复原映射并清空识别。
-  同目录需保留 `stravia_verify_webui.py`，网页探测使用浏览器 User-Agent。
-- `ops/verify-claude-code-compat.py` 验证 Sonnet、Opus 的 7 消息/38 工具/32000 上限
-  合成 CC 请求和字典工具结果往返；保持兼容开关开启，不需要真实聊天捕获。
+使用 GitHub Actions 的原生构建和隔离 SQLite/PostgreSQL 验收。部署前校验源码提交、完整补丁及 SHA256SUMS；原生部署方法见 [运行手册](PLATFORM-PLUGIN-DEPLOYMENT.md)。
 
-最终 Linux 测试二进制构建对 `stravia-core` 单独使用 `opt-level=0` 和
-`codegen-units=16`；九项回归完整保留。该配置生成的是测试产物，不作为生产
-主程序发布。原生生产主程序仍使用默认 release 优化。等价 Cargo 参数为：
-
-```sh
-cargo test --locked --release --target x86_64-unknown-linux-gnu \
-  --config 'profile.release.package.stravia-core.opt-level=0' \
-  --config 'profile.release.package.stravia-core.codegen-units=16' \
-  -p stravia-core --lib --no-run
-```
-
-GNU 目标的 glibc 最低版本需要匹配服务器的独立运行库；跨平台构建使用对应 Zig linker。
-
-平台单个 Artifact 上限为 100 MiB。`ops/upload-test-parts.cjs <private-directory>`
-将测试包分成 64 MiB 分片，调用同目录的 `upload-build-artifact.cjs` 上传，并只把
-分片 ID、大小和摘要写入清单。私有目录需有 `stravia-access.json`、打包产物和清单。
-每片上传凭据回执也只留在该私有目录，不能提交。服务端从分片流直接生成压缩镜像，
-不额外拼接整包或展开 ELF。测试通过后移除临时安装的测试工具。
-
-运维脚本中的清单、产物和报告放在 root 私有目录，不提交仓库；完整备份也包含凭据。
-本次通过 Artifact 上传的构建包在验证并使用后标记到期，由平台正常 GC 清理；
-不对用户上传文件做清理。打包产物另留在运维机，回退使用旧原生程序和完整快照。
-未来编译 LXC 只负责产出和校验原生文件，运行服务器无需安装编译工具。
+在自己的实例上运行 `ops/verify-responses-streams.py --host gateway.example.com --model gpt-6-luna` 验证完整 HTTP、WebSocket 和工具往返。合成请求不需要真实聊天捕获，报告仅包含状态、类型和耗时。凭据、运行清单和生产报告应存放在私有目录，不能提交仓库。

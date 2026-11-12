@@ -1,18 +1,21 @@
 """Local-only authenticated management helper; secrets never printed."""
-import http.client,json,pathlib
+import http.client,json,os,pathlib,urllib.parse
 
-ORIGIN='https://gateway.example.com'
-ACCESS=pathlib.Path('/root/stravia-access.json')
+ORIGIN=os.environ['STRINOVA_ADMIN_ORIGIN'].rstrip('/')
+origin=urllib.parse.urlsplit(ORIGIN)
+if origin.scheme not in ['http','https'] or not origin.hostname or origin.username or origin.password or origin.path or origin.query or origin.fragment:
+ raise ValueError('STRINOVA_ADMIN_ORIGIN must be a plain configured site origin')
+ACCESS=pathlib.Path(os.environ.get('STRINOVA_ACCESS_FILE','/root/stravia-access.json'))
 
 class Client:
  def __init__(self):self.cookies={};self.last_error=None
  def call(self,method,path,body=None,content_type='application/json',timeout=180):
-  headers={'Host':'gateway.example.com','X-Forwarded-Host':'gateway.example.com','X-Forwarded-Proto':'https','Origin':ORIGIN,'X-Stravia-CSRF':'1'}
+  headers={'Host':origin.netloc,'X-Forwarded-Host':origin.netloc,'X-Forwarded-Proto':origin.scheme,'Origin':ORIGIN,'X-Stravia-CSRF':'1'}
   if self.cookies:headers['Cookie']='; '.join(k+'='+v for k,v in self.cookies.items())
   if body is not None:
    headers['Content-Type']=content_type
    if not isinstance(body,bytes):body=json.dumps(body).encode()
-  conn=http.client.HTTPConnection('127.0.0.1',23471,timeout=timeout)
+  conn=http.client.HTTPConnection('127.0.0.1',int(os.environ.get('STRINOVA_ADMIN_PORT','23471')),timeout=timeout)
   conn.request(method,path,body,headers)
   response=conn.getresponse();raw=response.read()
   for name,value in response.getheaders():

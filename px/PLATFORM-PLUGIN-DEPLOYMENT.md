@@ -19,7 +19,7 @@ Prepare a root-only specification on the deployment host:
   "package_sha256": "<SHA256 of the native tar.gz>",
   "build_manifest_sha256": "<SHA256 of build-manifest.json>",
   "previous_host_sha256": "<SHA256 of the currently running executable>",
-  "release_name": "masub-platform-plugins-1",
+  "release_name": "native-patch-1",
   "vendor_versions": {
     "base": "<version declared by the packaged Base component>",
     "openai-codex": "<version declared by the packaged Codex component>",

@@ -1,0 +1,16 @@
+name: Strinova public-source privacy
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s px/ops -p test_public_source.py
+      - run: python3 px/ops/check-public-source.py

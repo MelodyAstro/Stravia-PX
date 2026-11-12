@@ -1,53 +1,23 @@
-# Codex upstream WebSocket and native custom tools
+# Codex upstream WebSocket
 
-The active `GPT-Private` and `GPT-Team-5X-SOLT-1` Providers use the ChatGPT OAuth channel:
+The ChatGPT OAuth channel uses:
 
 - HTTP Base: `https://chatgpt.com/backend-api/codex`
-- Provider → Advanced → WebSocket URL (`vendor_options.websocket_url`):
-  `wss://chatgpt.com/backend-api/codex/responses`
+- Provider advanced WebSocket URL: `wss://chatgpt.com/backend-api/codex/responses`
 
-This is the server-to-upstream endpoint. Client ingress stays at
-`wss://gateway.example.com/comments/responses` or
-`wss://gateway.example.com/comments/responses`.
-The API-key OpenAI endpoint `wss://api.openai.com/v1/responses` is a different
-channel and must not be used with this ChatGPT OAuth Provider.
+These are upstream service addresses, independent of your site's public hostname. If your reverse proxy uses the example `/comments` prefix, a client WebSocket endpoint is `wss://gateway.example.com/comments/responses`.
 
-Save the advanced field through the Provider editor or management API; it is
-stored with the Provider and survives restarts and backups. Do not rewrite an
-invalid Provider merely to populate this field: changing vendor options clears
-its invalid-credential marker. The renewed Team slot has eight separate `team/` routes and the existing
-`GPT-Team` Key has its own eight bare aliases. `GPT-Private` keeps its original
-routes and aliases. Do not redirect either group to the other account.
+The API-key endpoint `wss://api.openai.com/v1/responses` belongs to another authentication channel. Keep account groups isolated, and do not change an invalid account's options merely to clear its credential marker; reauthorize it through the management interface.
 
-## Custom tool compatibility
+The native host and Codex component must both support custom calls, free-form input events, namespaces, tool results and terminal completion. Retain `positional_additional_tools`, `per_key_request_model_mapping_v1` and `native_custom_tools_v1` in managed upgrade manifests.
 
-The former parser rejected `custom_tool_call`. Repeated parse errors then put
-the model Target in cooldown, producing `503: Model has no eligible Target`.
-The fix supports native custom call/output history, free-form input delta/done
-events, namespace and call identifiers, typed completion, and terminal-state
-consistency. Custom input is not coerced to JSON function arguments.
-Custom events count as visible output, so streams publish promptly and cannot
-be retried after client output is committed. Native custom history is rejected
-when the selected upstream protocol cannot represent it.
-
-Build and deploy the native host and Codex component together. The Codex
-component is `0.6.4+masub.responses.2`; the upgrade manifest must retain
-`positional_additional_tools`, `per_key_request_model_mapping_v1`, and
-`native_custom_tools_v1`. Keep the GA Claude compatibility component enabled.
-
-Run synthetic full round trips, not only WebSocket handshakes:
+Validate complete streams and tool round trips using your own public hostname:
 
 ```sh
-python3 verify-responses-streams.py --host gateway.example.com \
-  --model gpt-6.1-sol --custom-tools --report /root/custom-tools-main.json
-python3 verify-responses-streams.py --host gateway.example.com \
-  --model gpt-6.1-sol --custom-tools --report /root/custom-tools-cf.json
+python3 px/ops/verify-responses-streams.py --host gateway.example.com \
+  --model gpt-6-luna --custom-tools --report /root/custom-tools.json
 ```
 
-Each command verifies eight completed responses: plain and namespaced custom
-tools over HTTP and WebSocket, each followed by a tool-result response. Logs
-contain status, event count, output types, and timing only. Existing normal
-Responses and Claude compatibility smoke tests remain required.
+The script reads credentials from a private local file and reports status/type/timing metadata. A successful handshake alone does not establish response compatibility.
 
-Reference: [Responses WebSocket connect](https://developers.openai.com/api/reference/resources/responses/methods/connect),
-[custom tool call items](https://developers.openai.com/api/reference/resources/conversations/subresources/items/methods/create).
+Reference: [Responses WebSocket](https://developers.openai.com/api/reference/resources/responses/methods/connect).

@@ -1,5 +1,6 @@
 """Copy reachable immutable WebUI assets from the unmodified embedded server."""
-import collections,gzip,hashlib,http.client,json,pathlib,re,urllib.parse
+import collections,gzip,hashlib,http.client,json,os,pathlib,re,urllib.parse
+HOST=os.environ.get('STRINOVA_PUBLIC_HOST','localhost')
 ROOT=pathlib.Path('/var/www/stravia')
 ROOT.mkdir(parents=True,exist_ok=True,mode=0o755)
 queue=collections.deque(['/']);seen=set();saved=[];ignored=[]
@@ -10,7 +11,7 @@ while queue:
  seen.add(path)
  assert len(seen)<5000,'Unexpected asset graph size'
  conn=http.client.HTTPConnection('127.0.0.1',23471,timeout=30)
- conn.request('GET',path,headers={'Host':'gateway.example.com','X-Forwarded-Host':'gateway.example.com','X-Forwarded-Proto':'https'})
+ conn.request('GET',path,headers={'Host':HOST,'X-Forwarded-Host':HOST,'X-Forwarded-Proto':'https'})
  response=conn.getresponse();body=response.read();kind=response.getheader('Content-Type','');status=response.status;conn.close()
  assert status==200,(path,status)
  if path!='/':

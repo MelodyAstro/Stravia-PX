@@ -126,7 +126,7 @@ test('RT backup downloads credentials only after confirmation', async ({ page })
   await confirmation.getByRole('button', { name: 'Download RT JSON' }).click()
   const file = await downloaded
   expect(file.suggestedFilename()).toBe('antigravity-rt.json')
-  expect(JSON.parse(await readFile((await file.path())!, 'utf8'))).toEqual({
+  expect(JSON.parse(await readFile(await file.path(), 'utf8'))).toEqual({
     type: 'antigravity',
     refresh_token: 'fixture-backup-rt',
   })

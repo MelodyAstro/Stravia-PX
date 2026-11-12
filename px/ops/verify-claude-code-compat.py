@@ -1,5 +1,7 @@
 """Replay the complete CC fixture through the native Anthropic HTTP surface."""
-import copy,datetime,http.client,importlib.util,json,pathlib,subprocess,time
+import copy,datetime,http.client,importlib.util,json,os,pathlib,subprocess,time
+PUBLIC_HOST=os.environ['STRINOVA_PUBLIC_HOST']
+assert PUBLIC_HOST and all(c.isalnum() or c in '.-' for c in PUBLIC_HOST)
 spec=importlib.util.spec_from_file_location('client','/root/stravia-client.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);admin=m.Client().login()
 access=json.loads(pathlib.Path('/root/stravia-access.json').read_text());key=next(g['api_key'] for g in access['groups'] if g['name']=='GA-Claude')
 # The original CC capture has already been removed. Use a synthetic request
@@ -10,7 +12,7 @@ messages=[{'role':'user' if i%2==0 else 'assistant','content':'Reply only OK.' i
 original={'model':'claude-sonnet-4-6','system':'You are an Anthropic assistant performing a Claude Code compatibility diagnostic.','messages':messages,'tools':tools,'max_tokens':32000,'stream':True,'thinking':{'type':'adaptive'}}
 results=[]
 def generate(label,payload,public=False):
- start=time.monotonic();conn=http.client.HTTPSConnection('gateway.example.com',timeout=180) if public else http.client.HTTPConnection('127.0.0.1',23471,timeout=180)
+ start=time.monotonic();conn=http.client.HTTPSConnection(PUBLIC_HOST,timeout=180) if public else http.client.HTTPConnection('127.0.0.1',23471,timeout=180)
  path='/reviews/v1/messages' if public else '/v1/messages'
  conn.request('POST',path,json.dumps(payload).encode(),{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01'})
  response=conn.getresponse();events=[]

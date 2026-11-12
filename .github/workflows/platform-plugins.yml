@@ -105,6 +105,7 @@ jobs:
       - name: Build installable example and test sandbox
         run: |
           task build:platform-plugin-example
+          cargo build --locked --release --lib --target wasm32-wasip2 -p strinova-model-mapping
           cargo test --locked --release -p stravia-platform-plugin-sdk -p stravia-platform-plugin-runtime --lib
       - name: Build embedded provider
         run: task build:vendors

@@ -41,6 +41,17 @@
 !.env.*.example
 
 # Logs
+/private/
+/backups/
+/evidence/
+/px/local/
+/px/DEPLOYMENT-*.md
+stravia-access.json
+auth.json
+*-rt-backup.json
+*.sqlite
+*.sqlite3
+*.db
 *.log
 /logs/
 
