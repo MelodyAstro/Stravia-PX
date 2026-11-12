@@ -26,7 +26,7 @@ async fn credential_import_refreshes_codex_and_google_and_preserves_client_metad
         let runtime = VendorRuntime::new().unwrap();
         let path = std::env::var_os(artifact).expect("managed component path");
         let plugin = runtime.load(&std::fs::read(path).unwrap()).await.unwrap();
-        let services = Arc::new(MockServices { script: Mutex::new(VecDeque::from([
+        let services = Arc::new(MockServices { reject_provider_cookies: true, script: Mutex::new(VecDeque::from([
             (200, "application/json", json!({"access_token":"fresh-access", "refresh_token":"rotated-refresh", "expires_in":3600}).to_string(), None),
             (200, "application/json", json!({"access_token":"next-access", "expires_in":3600}).to_string(), None),
         ])), ..Default::default() });
@@ -117,6 +117,7 @@ async fn credential_import_access_only_codex_verifies_credentials_without_infere
         .await
         .unwrap();
     let services = Arc::new(MockServices {
+        reject_provider_cookies: true,
         script: Mutex::new(VecDeque::from([(
             200,
             "application/json",
@@ -157,4 +158,152 @@ async fn credential_import_access_only_codex_verifies_credentials_without_infere
         "https://chatgpt.com/backend-api/wham/usage"
     );
     assert_eq!(requests[0].method, "GET");
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires freshly built managed components"]
+async fn credential_import_codex_callback_preserves_pkce_and_upstream_rejections() {
+    let runtime = VendorRuntime::new().unwrap();
+    let plugin = runtime
+        .load(&std::fs::read(std::env::var_os("STRAVIA_CODEX_WASM").unwrap()).unwrap())
+        .await
+        .unwrap();
+    for status in [200, 400] {
+        let payload = if status == 200 {
+            json!({"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_in":3600})
+        } else {
+            json!({"error":"invalid_grant","error_description":"invalid authorization code"})
+        };
+        let services = Arc::new(MockServices {
+            reject_provider_cookies: true,
+            script: Mutex::new(VecDeque::from([(
+                status,
+                "application/json",
+                payload.to_string(),
+                None,
+            )])),
+            ..Default::default()
+        });
+        let mut account = provider(BTreeMap::new());
+        account.provider_id = "openai-codex".into();
+        account.channel = "codex".into();
+        account.base_url = "https://chatgpt.com/backend-api/codex".into();
+        let redirect = "http://localhost:1457/auth/callback";
+        let start = run(
+            &runtime,
+            &plugin,
+            &services,
+            OperationInput::Auth {
+                provider: account.clone(),
+                request: AuthRequest {
+                    step: AuthStep::Start {
+                        redirect_uri: redirect.into(),
+                        state: "fixture-state".into(),
+                    },
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            start,
+            OperationOutput::Auth(AuthResponse::Authorization { .. })
+        ));
+        assert!(services.requests.lock().is_empty());
+        let saved: Value =
+            serde_json::from_slice(services.private_state.lock().as_ref().unwrap()).unwrap();
+        let verifier = saved["code_verifier"].as_str().unwrap();
+        assert_eq!(verifier.len(), 96);
+        let output = run(
+            &runtime,
+            &plugin,
+            &services,
+            OperationInput::Auth {
+                provider: account,
+                request: AuthRequest {
+                    step: AuthStep::Exchange {
+                        callback_url: format!("{redirect}?state=fixture-state&code=fixture-code"),
+                    },
+                },
+            },
+        )
+        .await;
+        if status == 200 {
+            let OperationOutput::Auth(AuthResponse::Credentials { values, .. }) = output.unwrap() else {
+                panic!("expected exchanged credentials");
+            };
+            assert_eq!(values["access_token"], "fixture-access");
+            assert_eq!(values["refresh_token"], "fixture-refresh");
+        } else {
+            assert!(
+                matches!(
+                    &output,
+                    Err(RuntimeError::Plugin {
+                        kind: ErrorKind::Auth,
+                        upstream_status: Some(400),
+                        ..
+                    })
+                ),
+                "{output:?}"
+            );
+        }
+        let requests = services.requests.lock();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url, "https://auth.openai.com/oauth/token");
+        let form = std::str::from_utf8(&requests[0].body).unwrap();
+        assert!(form.contains("grant_type=authorization_code"));
+        assert!(form.contains("code=fixture-code"));
+        assert!(form.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1457%2Fauth%2Fcallback"));
+        assert!(form.contains(&format!("code_verifier={verifier}")));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires freshly built managed components"]
+async fn credential_import_codex_draft_connection_check_keeps_session_state() {
+    let runtime = VendorRuntime::new().unwrap();
+    let plugin = runtime
+        .load(&std::fs::read(std::env::var_os("STRAVIA_CODEX_WASM").unwrap()).unwrap())
+        .await
+        .unwrap();
+    let before = b"fixture-session-state".to_vec();
+    let services = Arc::new(MockServices {
+        reject_provider_cookies: true,
+        private_state: Mutex::new(Some(before.clone())),
+        script: Mutex::new(VecDeque::from([(
+            200,
+            "application/json",
+            json!({"plan_type":"team"}).to_string(),
+            None,
+        )])),
+        ..Default::default()
+    });
+    let mut account = provider(BTreeMap::from([(
+        "access_token".into(),
+        json!("fixture-access"),
+    )]));
+    account.provider_id = "openai-codex".into();
+    account.channel = "codex".into();
+    account.base_url = "https://chatgpt.com/backend-api/codex".into();
+    let output = run(
+        &runtime,
+        &plugin,
+        &services,
+        OperationInput::ConnectionCheck {
+            provider: account,
+            request: stravia_vendor_sdk::ConnectionCheckRequest {},
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        output,
+        OperationOutput::ConnectionCheck(stravia_vendor_sdk::ConnectionCheckResponse {
+            verified: stravia_vendor_sdk::ConnectionCheckVerification::Credentials,
+        })
+    ));
+    assert_eq!(*services.private_state.lock(), Some(before));
+    assert!(services.deltas.lock().is_empty());
+    assert_eq!(services.requests.lock().len(), 1);
+    assert_eq!(services.wire_log.lock().as_slice(), ["request"]);
 }

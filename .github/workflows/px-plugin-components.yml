@@ -9,6 +9,8 @@ jobs:
     timeout-minutes: 45
     env:
       CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: always
+      RUST_VERSION: '1.99.1'
     steps:
       - uses: actions/checkout@v6
         with:
@@ -24,8 +26,10 @@ jobs:
           key: patch-crate-0.1.13-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
-          shared-key: strinova-plugins-v065
+          shared-key: strinova-platform-workspace-v065
+          cache-all-crates: 'true'
           cache-workspace-crates: 'true'
+          cache-bin: 'true'
       - uses: go-task/setup-task@v2
         with:
           version: '3.52.0'
@@ -34,6 +38,8 @@ jobs:
         run: cargo test --locked --release -p strinova-model-mapping -p stravia-vendor-sdk -p stravia-vendor-common --lib
       - name: Build independently installable components
         run: cargo build --locked --release --lib --target wasm32-wasip2 -p strinova-model-mapping -p stravia-vendor-codex -p stravia-vendor-claudecode -p stravia-vendor-antigravity
+      - name: Verify unsaved Codex OAuth and credential import
+        run: STRAVIA_CODEX_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_codex.wasm" STRAVIA_ANTIGRAVITY_WASM="$PWD/target/wasm32-wasip2/release/stravia_vendor_antigravity.wasm" cargo test --locked --release -p stravia-vendor-claudecode --test contract credential_import -- --ignored
       - name: Checksum components
         run: |
           mkdir plugins

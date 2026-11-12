@@ -284,7 +284,7 @@ fn token_request(host: &GuestHost, form: String) -> Result<TokenResponse, Plugin
             ]),
             body: form.into_bytes(),
         },
-        &crate::codex::http_options()?,
+        &crate::codex::stateless_http_options()?,
     )?;
     let status = response.status()?;
     let headers = response.headers()?;

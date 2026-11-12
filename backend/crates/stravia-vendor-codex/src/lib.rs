@@ -52,7 +52,7 @@ pub fn descriptor() -> VendorDescriptor {
     VendorDescriptor {
         egress_shapes: Vec::new(),
         vendor_id: VENDOR_ID.into(),
-        version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.responses.3"))
+        version: semver::Version::parse(concat!(env!("CARGO_PKG_VERSION"), "+masub.responses.4"))
             .expect("package version must be valid semver"),
         display_name: "OpenAI Codex".into(),
         description: Some(

@@ -54,7 +54,7 @@ pub(super) fn connection_check(
     let access_token = access_token(provider)?;
     let response = host.http_start(
         usage_request(provider, access_token),
-        &crate::codex::http_options()?,
+        &crate::codex::stateless_http_options()?,
     )?;
     let value = connection_check::read_json(&response)?;
     validate_usage(&value)?;

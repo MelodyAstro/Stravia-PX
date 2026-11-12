@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed Codex OAuth callbacks, token refresh, and credential import before an account is saved. Authorization and draft connection checks retain the Codex transport profile without requiring a saved account's Cookie jar.
+
 ## Strinova 0.6.5-patch — upstream 0.6.5 integration
 
 - Renamed the product and repository to Strinova, with explicit upstream attribution.

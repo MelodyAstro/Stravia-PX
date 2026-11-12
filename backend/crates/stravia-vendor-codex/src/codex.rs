@@ -968,12 +968,20 @@ pub(super) fn http_fields(mut headers: Vec<(String, String)>) -> stravia_vendor_
 
 pub(super) fn http_options()
 -> Result<stravia_vendor_sdk::net::Options, stravia_vendor_sdk::PluginError> {
+    let mut options = stateless_http_options()?;
+    options
+        .set(stravia_vendor_sdk::net::keys::COOKIES, COOKIE_POLICY)
+        .map_err(|e| invalid(e.to_string()))?;
+    Ok(options)
+}
+
+/// OAuth exchanges and draft checks have session state but no admitted
+/// provider Cookie jar. Keep the Codex transport shape without requesting one.
+pub(super) fn stateless_http_options()
+-> Result<stravia_vendor_sdk::net::Options, stravia_vendor_sdk::PluginError> {
     let mut options = stravia_vendor_sdk::net::Options::new();
     options
         .shape("codex-http")
-        .map_err(|e| invalid(e.to_string()))?;
-    options
-        .set(stravia_vendor_sdk::net::keys::COOKIES, COOKIE_POLICY)
         .map_err(|e| invalid(e.to_string()))?;
     Ok(options)
 }

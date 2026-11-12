@@ -13,6 +13,11 @@ cannot refresh automatically. API-key, Agent Identity and personal-access-token
 records are explicitly rejected by this subscription importer. They are not
 silently converted to OAuth.
 
+The Codex component `0.6.5+masub.responses.4` fixes OAuth callbacks, refresh-token
+imports and access-only verification for accounts that have not been saved yet.
+After upgrading the component, start a new authorization session; existing
+sessions retain the component version with which they were opened.
+
 Antigravity/Google accepts `{"type":"antigravity","refresh_token":"…",
 "email":"…","project_id":"…"}`, arrays, the `mail` spelling, or a single
 plain refresh token. Existing access tokens are replaced by a Google OAuth refresh.

@@ -129,6 +129,7 @@ def package_native(repo, out, environment, *, base_commit=BASE_COMMIT, rust_vers
             "native_custom_tools_v1", "platform_plugins_v1", "outbound_identity_tls_v1", "request_model_plugin_v1",
             "account_reset_controls_v1", "account_site_spend_estimates_v1",
             "oauth_credential_import_v1", "antigravity_rt_backup_v1",
+            "codex_stateless_oauth_v1",
         ],
         "build_target": "x86_64-unknown-linux-gnu",
         "glibc_baseline": "2.35",

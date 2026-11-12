@@ -179,6 +179,8 @@ struct MockServices {
     state: Arc<StateStore>,
     deltas: Mutex<Vec<AiStreamDelta>>,
     reject_assistant_prefill: bool,
+    /// Unsaved OAuth and draft connections have no provider-scoped Cookie jar.
+    reject_provider_cookies: bool,
     /// 宿主可见的有序事件：`start`、`request`、`failed`。
     wire_log: Mutex<Vec<&'static str>>,
 }
@@ -196,8 +198,18 @@ impl HostServices for MockServices {
     fn http_start(
         &self,
         request: HttpRequest,
-        _options: Options,
+        options: Options,
     ) -> Result<Arc<dyn HostHttpResponse>, HostFailure> {
+        if self.reject_provider_cookies
+            && options
+                .iter()
+                .any(|(key, _)| key == stravia_vendor_sdk::net::keys::COOKIES)
+        {
+            return Err(HostFailure::new(
+                ErrorKind::Unsupported,
+                "cookies require an admitted provider",
+            ));
+        }
         self.wire_log.lock().push("request");
         if self.reject_assistant_prefill {
             let body: Value = serde_json::from_slice(&request.body).unwrap();
