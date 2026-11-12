@@ -472,6 +472,12 @@ def sync_managed_metadata(spec, inspected, responses, ga, changed):
     manifest, files = inspected['manifest'], inspected['files']
     source_fields = {key: manifest[key] for key in ['source_commit', 'source_base_commit', 'upstream_tag', 'built_at_utc']}
     source_fields['source_patch_sha256'] = files['source.patch']['sha256']
+    source_fields['component_source'] = {
+        'source_commit': manifest['source_commit'],
+        'source_base_commit': manifest['source_base_commit'],
+        'source_patch_sha256': files['source.patch']['sha256'],
+        'source_patch_file': 'source.patch',
+    }
     candidate = ROOT / 'releases' / manifest['upstream_tag'] / spec['release_name']
     patch = (candidate / 'source.patch').read_bytes()
     directory = ROOT / 'responses-compat'

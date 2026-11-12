@@ -62,6 +62,31 @@ def inspect(package, files):
 
 
 class NativePackageTests(unittest.TestCase):
+    def test_native_upgrade_replaces_component_only_hotfix_provenance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package, files = make_package(root)
+            inspected = inspect(package, files)
+            candidate = root / 'releases/v0.6.4/fixture-release'
+            candidate.mkdir(parents=True)
+            for name in ['source.patch', 'codex.wasm']:
+                (candidate / name).write_bytes(files[name])
+            (root / 'responses-compat').mkdir()
+            responses = {'component': 'codex.wasm', 'host_sha256': 'previous-host',
+                         'component_source': {'source_commit': 'old-component-hotfix'}}
+            spec = {'release_name': 'fixture-release',
+                    'vendor_versions': {'openai-codex': 'fixture-version'}}
+            with patch.object(deploy, 'ROOT', root):
+                deploy.sync_managed_metadata(spec, inspected, responses, {}, [])
+            metadata = deploy.read_json(root / 'responses-compat/manifest.json')
+            self.assertEqual(metadata['component_source'], {
+                'source_commit': COMMIT, 'source_base_commit': '2' * 40,
+                'source_patch_sha256': inspected['files']['source.patch']['sha256'],
+                'source_patch_file': 'source.patch',
+            })
+            self.assertEqual(metadata['source_commit'], COMMIT)
+            self.assertEqual(metadata['sha256'], deploy.digest(root / 'responses-compat/codex.wasm'))
+
     @unittest.skipIf(os.name == 'nt', 'POSIX directory access permissions')
     def test_new_release_parents_allow_service_access_under_private_umask(self):
         with tempfile.TemporaryDirectory() as temporary:

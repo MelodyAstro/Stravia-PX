@@ -493,6 +493,43 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn credential_import_all_four_codex_documents_preserve_credentials_only() -> anyhow::Result<()> {
+        let flat = serde_json::json!({
+            "type":"codex", "id_token":"fixture-id", "access_token":"fixture-at",
+            "refresh_token":"fixture-rt", "account_id":"fixture-team",
+            "email":"fixture@example.invalid", "last_refresh":"2026-01-01T00:00:00Z",
+            "expired":"2026-01-02T00:00:00Z"
+        });
+        let official = serde_json::json!({"auth_mode":"chatgpt", "OPENAI_API_KEY":null,
+            "tokens":flat, "last_refresh":"2026-01-01T00:00:00Z"});
+        let sub2api = serde_json::json!({"type":"sub2api-data", "version":1, "accounts":[{
+            "name":"Fixture", "platform":"openai", "type":"oauth", "credentials":flat,
+            "proxy":"https://untrusted.invalid", "base_url":"https://untrusted.invalid"
+        }]});
+        for (format, document_value) in [
+            ("official auth.json", official),
+            ("Cockpit Tools array", serde_json::json!([flat.clone()])),
+            ("CLIProxyAPI record", flat.clone()),
+            ("sub2api accounts", sub2api),
+        ] {
+            let request = input("codex", document_value);
+            let rows = document(&request)?;
+            assert_eq!(rows.len(), 1, "{format}");
+            let row = parse_row("codex", &rows[0], 0)?;
+            assert_eq!(row.values["id_token"], "fixture-id", "{format}");
+            assert_eq!(row.values["access_token"], "fixture-at", "{format}");
+            assert_eq!(row.values["refresh_token"], "fixture-rt", "{format}");
+            assert_eq!(row.values["account_id"], "fixture-team", "{format}");
+            assert_eq!(row.values.len(), 5, "{format}");
+        }
+        let mut escaped = input("codex", Value::Null);
+        escaped.json = "[\\\n&#x20; {\\\n\"refresh_token\":\"private-fixture\"\\\n}]".into();
+        let error = document(&escaped).unwrap_err().to_string();
+        assert_eq!(error, "IMPORT_INVALID_JSON");
+        Ok(())
+    }
+
+    #[test]
     fn malformed_and_non_oauth_material_is_rejected_without_echoing_it() {
         for value in [
             serde_json::json!({"auth_mode":"agentIdentity","agent_private_key":"sensitive-fixture"}),
