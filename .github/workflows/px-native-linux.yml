@@ -78,6 +78,30 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout private Strinova host patch
+        uses: actions/checkout@v6
+        with:
+          repository: MelodyAstro/Strinova
+          ref: main
+          token: ${{ secrets.STRINOVA_PRIVATE_TOKEN }}
+          path: .strinova-patch
+          persist-credentials: false
+
+      - name: Apply private Strinova host patch
+        run: python3 .strinova-patch/scripts/apply-patch.py --source "$GITHUB_WORKSPACE"
+
+      - name: Checkout private vendor patch
+        uses: actions/checkout@v6
+        with:
+          repository: MelodyAstro/Strinova
+          ref: private/vendor-plugins
+          token: ${{ secrets.STRINOVA_PRIVATE_TOKEN }}
+          path: .strinova-vendor-patch
+          persist-credentials: false
+
+      - name: Apply private vendor patch
+        run: python3 .strinova-vendor-patch/scripts/apply-patch.py --source "$GITHUB_WORKSPACE" --vendor
+
       - name: Verify complete source patch before compilation
         if: inputs.tools_only != true
         run: |
