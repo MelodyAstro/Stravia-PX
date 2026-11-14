@@ -13,12 +13,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: strinova-native-release-v0.6.5-patch
+  group: strinova-native-release-v0.7.0-patch
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: github.repository == 'MelodyAstro/Strinova' && github.ref == 'refs/heads/main'
+    if: github.repository == 'MelodyAstro/Strinova-Old' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
